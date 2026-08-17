@@ -66,14 +66,22 @@ remote_receiver:
   dump: ${ir_dump}
   # LG remotes have loose timings; the stock 25% rejects many real frames.
   tolerance: 55%
-  # LG AC frames contain gaps of roughly 8-10ms *within* a single message. idle
-  # must exceed those or one frame arrives as several fragments. On the ESP32-C3
-  # idle is capped at 32767us at the default 1MHz clock, so drop the resolution
-  # to 500kHz (2us ticks) to buy headroom, exactly as Seeed's own config does.
-  clock_resolution: "500000"
-  idle: 25ms
-  # Suppress sub-250us glitches from fluorescent lighting and sunlight.
-  filter: 250us
+  # Measured on this remote: a 3180/1610us header, then a constant ~540us mark
+  # with either a ~302us or a ~1090us space carrying the bit. Nothing mid-frame
+  # comes close to the 8-10ms gaps other LG models are documented to have, so the
+  # default 1MHz clock is fine and gives 1us rather than 2us resolution. Keep
+  # idle above ~1.1ms by a wide margin but short enough that a repeated frame
+  # arrives as two captures rather than one double-length one.
+  idle: 15ms
+  # Must stay well clear of the ~302us short space. The old 250us sat close
+  # enough that jitter could swallow a real one, and a swallowed space does not
+  # produce an obvious error: it silently merges two bits into one long mark.
+  filter: 100us
+  # A 112-bit frame is 224 symbols before the header and terminator, so the
+  # default 192 truncates it. The C3's RX hardware only holds 96 symbols at a
+  # time; the driver streams into this larger buffer as the hardware fills.
+  receive_symbols: 512
+  buffer_size: 20000b
   on_raw:
     # The symbol count is the fastest way to spot a truncated capture: every
     # press of a given button must report the same number.

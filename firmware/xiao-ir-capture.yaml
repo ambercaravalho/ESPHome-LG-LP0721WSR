@@ -21,10 +21,11 @@ substitutions:
   device_address: "xiao-ir-mate-1a2b3c.local"
   # The raw dumper logs at DEBUG. INFO (Seeed's default) hides every capture.
   log_level: "DEBUG"
-  # "all" also runs every protocol-specific decoder, so if this remote happens
-  # to match a family ESPHome already knows, it will say so and save us the
-  # reverse engineering. Narrow to "raw" if the extra chatter gets in the way.
-  ir_dump: "all"
+  # This has to be "raw", not "all". ESPHome marks the raw dumper as *secondary*,
+  # meaning it only runs when no protocol-specific dumper claimed the frame, and
+  # the Pronto dumper claims everything. So "all" silently produces no
+  # "Received Raw:" lines at all, which is exactly what tools/parse_raw.py needs.
+  ir_dump: "raw"
 
 packages:
   hardware: !include packages/xiao-hardware.yaml

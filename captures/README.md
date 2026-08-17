@@ -19,14 +19,21 @@ LG remote. This document is the procedure. Budget about 30 minutes.
    internally, so capturing in Celsius means the numbers you write down are the
    numbers in the frame. It removes an entire class of off-by-one confusion.
 3. Point the remote at the top of the IR Mate from about 20 cm away, slightly
-   off-axis. Pressed directly against the receiver, a strong emitter can
-   saturate it and distort the mark/space widths.
+   off-axis. This matters more than it sounds. Held up close, a strong emitter
+   saturates the receiver's AGC, which then bridges straight over the short
+   ~302 µs spaces. That does not look like an error: the two bits either side of
+   a swallowed space merge into one double-length mark, so you get a frame that
+   parses fine and is quietly wrong. See Troubleshooting for the signature.
 4. Open the ESPHome log stream and confirm the level is `DEBUG`. You should see
-   `[D][ir]: raw frame: N symbols` plus a `Received Raw:` block on every press,
-   and the status LED should flash amber.
+   `[D][ir]: raw frame: N symbols` **plus a `Received Raw:` block** on every
+   press, and the status LED should flash amber. If the `raw frame:` line appears
+   without a `Received Raw:` block, `dump` is not set to `raw` — see
+   Troubleshooting.
 5. Note the symbol count from the first capture. **Every capture of the same
-   button must report the same count.** A count that jumps around means frames
-   are being truncated or split — see Troubleshooting below.
+   button must report the same count.** Expect roughly 226 for this remote: a
+   112-bit frame is 224 symbols, plus the header pair and the terminator. A count
+   that jumps around, or one well below 226, means frames are being merged,
+   truncated, or split — see Troubleshooting below.
 
 ## The labelling convention
 
@@ -70,15 +77,22 @@ skip rows, and don't reorder them.
 
 ### A. Determinism check
 
-Press the same button three times without changing anything. All three frames
-must be byte-identical. If they aren't, the protocol carries a toggle or
-sequence bit and the whole analysis changes, so we need to know up front.
+This needs three frames that *ought* to be byte-identical, so the press has to be
+one that changes nothing. `temp_up` only works for that at the top of the range:
+raise the setpoint to 30 first, then press `∧` three more times. The remote has
+nowhere left to go, so it retransmits the same state.
 
 ```
-# state: mode=cool temp=24 fan=high button=temp_up
+# state: mode=cool temp=30 fan=high button=temp_up
 ```
 
-x3, then set it back to 24.
+x3, then bring it back down to 24.
+
+If the three frames differ, the protocol carries a toggle or sequence counter and
+the whole analysis changes, so we need to know that before capturing anything
+else. Note that pressing `temp_up` anywhere *below* the maximum is not a
+determinism test: each press genuinely changes the setpoint, so the frames are
+supposed to differ.
 
 ### B. Power
 
@@ -206,16 +220,32 @@ python3 tools/decode.py captures/*.txt
 
 ## Troubleshooting
 
-**Symbol count varies between presses of the same button.** The frame is being
-split. Raise `idle` in `packages/xiao-hardware.yaml` (the cap is 65534 µs at
-`clock_resolution: "500000"`). If it is being truncated instead, raise
-`rmt_symbols` from the ESP32-C3 default of 96 to 192, and `buffer_size` to
-`20000b`.
+**Symbol count varies between presses of the same button, and is below 226.**
+Almost certainly receiver saturation from holding the remote too close. The
+signature is unmistakable in the raw dump: alongside the normal ~540 µs marks you
+get marks at ~1370, ~2220, ~3070 µs and up, each one an exact multiple of
+`k × 540 + (k−1) × 302`. Those are runs of *k* bits with the short spaces between
+them swallowed. Back off to 20 cm and go further off-axis. If it persists, check
+`filter` is well under 302 µs — it is `100us` here, and anything near 250 µs is
+close enough to eat real bits.
 
-**No `Received Raw:` lines at all.** Check the logger is at `DEBUG`, check the
-remote's batteries, and confirm you are watching the receiver on `GPIO4` with
-`inverted: true`. Point a phone camera at the remote's emitter to confirm it is
-actually firing — most phone front cameras show IR as a faint purple flicker.
+**Symbol count is a clean multiple of a shorter frame.** Then it really is being
+split or doubled, and `idle` is the knob. Raise it if one press arrives as
+several captures, lower it if two repeats arrive merged as one. The cap is
+32767 µs at the default 1 MHz clock, and proportionally less if you set
+`clock_resolution`.
+
+**`raw frame: N symbols` appears but there is no `Received Raw:` block.** `dump`
+is set to `all`. ESPHome marks the raw dumper as *secondary*, so it only runs
+when no protocol-specific dumper claimed the frame — and the Pronto dumper claims
+everything. Set `ir_dump: "raw"`. This is the one failure that produces a log
+which looks busy and successful while containing nothing the tools can read.
+
+**No `Received Raw:` lines and no `raw frame:` lines either.** Check the logger is
+at `DEBUG`, check the remote's batteries, and confirm you are watching the
+receiver on `GPIO4` with `inverted: true`. Point a phone camera at the remote's
+emitter to confirm it is actually firing — most phone front cameras show IR as a
+faint purple flicker.
 
 **Frames arrive but look like noise.** Increase `tolerance` to `65%`, and move
 away from sunlight, fluorescent tubes, and plasma/OLED TVs.
