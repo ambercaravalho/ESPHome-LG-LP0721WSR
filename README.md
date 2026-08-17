@@ -84,7 +84,32 @@ Fill in your Wi-Fi details, then copy `api.encryption.key` and `ota.password`
 out of the config the device is running now (ESPHome dashboard → your device →
 Edit) into `secrets.yaml`. `firmware/secrets.yaml` is gitignored.
 
-### 2. Confirm the toolchain
+### 2. Match your device's name and address
+
+Both firmware configs set `name_add_mac_suffix: true`, so the device answers to
+`${name}-<last three MAC bytes>` rather than to `${name}`. Two substitutions at
+the top of `firmware/xiao-ir-capture.yaml` and `firmware/xiao-lg-lp0721wsr.yaml`
+have to agree with reality:
+
+- `name` must be byte-for-byte the name the device already uses, or Home
+  Assistant will treat the result as a brand-new device and orphan the existing
+  entities. Seeed's factory firmware uses `xiao-ir-mate`.
+- `device_address` is how the `esphome` CLI finds the device for OTA. The CLI
+  cannot derive the MAC suffix by itself, so without this it tries the
+  suffix-less `${name}.local` and fails to resolve.
+
+To read both off the network, browse for the ESPHome mDNS service:
+
+```bash
+dns-sd -B _esphomelib._tcp
+```
+
+The advertised instance name is the full hostname. Strip the trailing
+`-<six hex digits>` to get `name`, and append `.local` to get `device_address`.
+An IP address works for `device_address` too, at the cost of breaking whenever
+DHCP reassigns it.
+
+### 3. Confirm the toolchain
 
 No dependencies beyond the Python standard library. A synthetic session is
 checked in so you can prove the analysis pipeline works before touching
@@ -95,7 +120,7 @@ python3 tools/decode.py tools/fixtures/example-session.txt --emit-cpp
 python3 -m unittest discover -s tools -p 'test_*.py'
 ```
 
-### 3. Capture your remote
+### 4. Capture your remote
 
 ```bash
 esphome run firmware/xiao-ir-capture.yaml
@@ -111,7 +136,7 @@ Save the logs into `captures/` and analyse them:
 python3 tools/decode.py captures/ --emit-cpp
 ```
 
-### 4. Reconcile
+### 5. Reconcile
 
 Compare the decoder's output against the `PROTOCOL TABLE` block in
 [`components/lg_portable_ac/lg_portable_ac.h`](components/lg_portable_ac/lg_portable_ac.h).
@@ -123,7 +148,7 @@ Compare the decoder's output against the `PROTOCOL TABLE` block in
 - **Field positions or command values differ** → paste the generated block over
   the `PROTOCOL TABLE` in the header.
 
-### 5. Flash the real firmware
+### 6. Flash the real firmware
 
 Set `room_temperature_entity` to a temperature sensor you already have in that
 room (the AC does not report its own), then:
@@ -229,6 +254,14 @@ to cases where nobody touched the control panel directly.
 **OTA rejected after switching configs.** `api.encryption.key` or `ota.password`
 in `secrets.yaml` does not match what the device is running. Copy them from the
 existing dashboard config, or reflash over USB.
+
+**`Error resolving IP address` on upload.** The CLI is looking for
+`${name}.local`, but `name_add_mac_suffix` means the device answers to
+`${name}-<mac suffix>`. Set the `device_address` substitution, per setup step 2.
+
+**A second, duplicate device appears in Home Assistant.** The `name`
+substitution does not match what the device was previously called. Fix `name`,
+reflash, then delete the stale device from the ESPHome integration page.
 
 ## Repository layout
 

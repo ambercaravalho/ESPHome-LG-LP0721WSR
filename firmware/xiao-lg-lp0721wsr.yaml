@@ -15,8 +15,12 @@
 #      PROTOCOL.md.
 
 substitutions:
-  name: "xiao-smart-ir-mate"
+  # Must match the name the device already answers to, or Home Assistant treats
+  # this as a brand-new device and orphans the existing entities.
+  name: "xiao-ir-mate"
   friendly_name: "Portable AC"
+  # "${name}-" plus the last three bytes of the MAC, lowercase and unseparated.
+  device_address: "xiao-ir-mate-1a2b3c.local"
   log_level: "DEBUG"
   # Keep the raw dumper on: it costs nothing and it is how you compare what we
   # transmit against what the real remote sends. Set to "none" once happy.

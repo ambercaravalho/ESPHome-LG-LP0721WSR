@@ -11,8 +11,14 @@
 # will need to reflash over USB. See README.md for the secrets.yaml template.
 
 substitutions:
-  name: "xiao-smart-ir-mate"
+  # This must stay byte-for-byte identical to the name the device already
+  # answers to. Seeed's factory firmware uses "xiao-ir-mate"; confirm yours by
+  # browsing for _esphomelib._tcp on your network and stripping the MAC suffix.
+  name: "xiao-ir-mate"
   friendly_name: "XIAO Smart IR Mate"
+  # "${name}-" plus the last three bytes of the MAC, lowercase and unseparated.
+  # For AC:27:6E:1A:2B:3C that is 1a2b3c. An IP address works here too.
+  device_address: "xiao-ir-mate-1a2b3c.local"
   # The raw dumper logs at DEBUG. INFO (Seeed's default) hides every capture.
   log_level: "DEBUG"
   # "all" also runs every protocol-specific decoder, so if this remote happens
