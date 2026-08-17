@@ -62,6 +62,15 @@ where the interesting thing is the press itself rather than the resulting
 state. For the climate state itself, `mode`/`temp`/`fan` are what the decoder
 correlates against.
 
+**A label applies to every capture until the next one, including presses you did
+not mean to record.** The receiver has no idea which presses are the experiment
+and which are you navigating back to a starting state, so the six presses that
+walk the setpoint from 30 back to 24 all inherit whatever label was last set.
+That is worse than leaving them unlabelled: the decoder sees several different
+frames all claiming the same state, declares the protocol non-deterministic, and
+mis-attributes fields. Either re-mark before each group, or mark the navigation
+presses as you make them — they are perfectly good data once labelled correctly.
+
 One rule that is easy to get wrong: **never drop a key just because it stopped
 being meaningful.** The decoder locates a field by finding two captures that
 differ in exactly one key, so labelling a power-off as `mode=off` when the
