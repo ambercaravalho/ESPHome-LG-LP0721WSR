@@ -38,7 +38,11 @@ LG remote. This document is the procedure. Budget about 30 minutes.
 ## The labelling convention
 
 Before each press, type the state into the **Capture Label** text field in Home
-Assistant and hit the **Mark Capture** button. That writes a line like
+Assistant and hit the **Mark Capture** button. Describe the state the unit will be
+in **after** the press, since that is what the frame carries — for a cycling
+button like Mode, that is the next value, not the current one. Type only the
+`key=value` pairs; the firmware adds the `# state:` prefix itself. It writes a
+line like
 
 ```
 # state: mode=cool temp=24 fan=high
@@ -116,21 +120,30 @@ normal frame.
 
 ### C. Modes, everything else held constant
 
-Fan speed High, temperature 24 throughout.
+Temperature 24 throughout, and starting from Cool.
+
+Mode is a cycle, so mind the off-by-one: the first press does not capture Cool, it
+*leaves* Cool and lands on Dry. Label what the unit shows after the press, not
+what it was showing when you pressed. Three presses from Cool therefore give:
 
 ```
+# state: mode=dry temp=24 button=mode
+# state: mode=fan temp=24 button=mode
 # state: mode=cool temp=24 fan=high button=mode
-# state: mode=dry fan=low button=mode
-# state: mode=fan fan=high button=mode
 ```
 
-Then, only if your model has it (`LP0721SHR` and similar):
+The third one returning to Cool is a free correctness check: it must come out
+byte-identical to the Cool frame from section B. If it doesn't, something drifted.
+
+Then, only if your model has it (`LP0721SHR` and similar), one more press:
 
 ```
 # state: mode=heat temp=24 fan=high button=mode
 ```
 
-Note that Dry forces its own fan speed, so record whatever the remote shows.
+Dry and Fan may force their own fan speed. If you can read it off the remote,
+record it; if you can't, leave the `fan` key out entirely rather than guessing.
+An absent key is merely skipped, while a wrong one corrupts the attribution.
 
 ### D. Temperature sweep, in Cool at Fan High
 
