@@ -1,0 +1,52 @@
+# Phase 1: IR capture rig for the XIAO Smart IR Mate.
+#
+# Flash this, open the ESPHome log stream, then work through the capture matrix
+# in captures/README.md. Every button press on the LG remote prints a
+# "Received Raw:" block that tools/decode.py can parse.
+#
+# Keep `name` identical to your existing device so Home Assistant keeps the
+# same device and entity IDs instead of re-adopting it as something new. Copy
+# `api.encryption.key` and `ota.password` out of your current dashboard config
+# into secrets.yaml first, otherwise the OTA update will be rejected and you
+# will need to reflash over USB. See README.md for the secrets.yaml template.
+
+substitutions:
+  name: "xiao-smart-ir-mate"
+  friendly_name: "XIAO Smart IR Mate"
+  # The raw dumper logs at DEBUG. INFO (Seeed's default) hides every capture.
+  log_level: "DEBUG"
+  # "all" also runs every protocol-specific decoder, so if this remote happens
+  # to match a family ESPHome already knows, it will say so and save us the
+  # reverse engineering. Narrow to "raw" if the extra chatter gets in the way.
+  ir_dump: "all"
+
+packages:
+  hardware: !include packages/xiao-hardware.yaml
+
+# Type the state you are about to capture here, press "Mark Capture", then
+# press the button on the LG remote. The mark is written to the log in the
+# exact "# state: ..." format that tools/parse_raw.py reads, so labels survive
+# a copy-paste of the log with no manual editing.
+text:
+  - platform: template
+    id: capture_label
+    name: "Capture Label"
+    mode: text
+    optimistic: true
+    min_length: 0
+    max_length: 100
+    initial_value: "mode=cool temp=72 fan=high"
+
+button:
+  - platform: template
+    id: mark_capture
+    name: "Mark Capture"
+    on_press:
+      - script.execute:
+          id: haptic
+          duration: 60
+      - logger.log: "--------------------------------------------------"
+      - logger.log:
+          level: INFO
+          format: "# state: %s"
+          args: ["id(capture_label).state.c_str()"]

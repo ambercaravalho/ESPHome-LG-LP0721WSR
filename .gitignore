@@ -1,0 +1,10 @@
+# Real credentials never belong in the repo; only the .example template does.
+firmware/secrets.yaml
+secrets.yaml
+
+# ESPHome build artefacts and local toolchains
+.esphome/
+.venv-esphome/
+.venv/
+__pycache__/
+*.pyc

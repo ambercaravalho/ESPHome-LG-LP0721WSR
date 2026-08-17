@@ -1,0 +1,106 @@
+# Remote functions that do not fit a Home Assistant climate entity.
+#
+# Home Assistant's climate entity covers power, mode, setpoint, fan speed and
+# swing. The LG remote has three more buttons, and each one is a *toggle* or a
+# *counter* rather than a state, so they are exposed here as buttons and a number
+# that fire one frame per press.
+#
+# Every frame below goes through `lg_portable_ac.send_frame`, which recomputes
+# the checksum, so you only need the command portion. To fill one in from your
+# own captures, take the `hex` value that tools/decode.py prints for that button
+# and paste it as the `frame`.
+#
+# Expected substitutions: none. Requires a `lg_portable_ac` climate component
+# with id `ac`, and the `ack_transmit` script from xiao-hardware.yaml.
+
+button:
+  # Display brightness cycles On -> Dim -> Off, one step per press. 0x88C00A6 is
+  # the documented LG "light toggle" frame. If your captures show something
+  # else, replace it.
+  - platform: template
+    id: light_cycle_button
+    name: "Display Brightness"
+    icon: mdi:brightness-6
+    entity_category: config
+    on_press:
+      - lg_portable_ac.send_frame:
+          id: ac
+          frame: 0x88C00A6
+      - script.execute: ack_transmit
+
+  # Only useful on models with motorised louvres. The climate entity's swing
+  # control drives the same command; this button is here for units where you
+  # left `supports_swing: false` but still want to nudge the vanes.
+  - platform: template
+    id: swing_toggle_button
+    name: "Swing Toggle"
+    icon: mdi:arrow-oscillating
+    entity_category: config
+    on_press:
+      - lg_portable_ac.send_frame:
+          id: ac
+          frame: 0x8810000
+      - script.execute: ack_transmit
+
+number:
+  # The remote has no "set timer to N hours" frame: each press of Timer advances
+  # the counter by one hour, and a press once past 24 cancels it. So this entity
+  # fires the same frame N times with a gap between, which is exactly what a
+  # person does with the remote.
+  #
+  # The Timer frame is NOT known yet. Unlike Light and Swing, there is no
+  # documented LG value to fall back on, and guessing is not harmless: every
+  # plausible guess sits in the same command byte as power-off, so a wrong value
+  # would shut the unit down repeatedly. The script below therefore refuses to
+  # transmit until you fill the frame in. Capture section F of
+  # captures/README.md, then set `timer_frame` in the script below.
+  - platform: template
+    id: delay_timer
+    name: "Delay Timer"
+    icon: mdi:timer-outline
+    entity_category: config
+    unit_of_measurement: "h"
+    optimistic: true
+    restore_value: false
+    initial_value: 0
+    min_value: 0
+    max_value: 24
+    step: 1
+    mode: box
+    set_action:
+      - script.execute:
+          id: press_timer_button
+          presses: !lambda return (int) x;
+
+globals:
+  # Set this to the Timer frame from your captures to enable the Delay Timer.
+  # 0 means "not captured yet" and the script below will refuse to transmit.
+  - id: timer_frame
+    type: uint64_t
+    initial_value: "0"
+
+script:
+  - id: press_timer_button
+    mode: restart
+    parameters:
+      presses: int
+    then:
+      - if:
+          condition:
+            lambda: return id(timer_frame) == 0;
+          then:
+            - logger.log:
+                level: WARN
+                format: "Delay Timer needs a captured frame; see packages/lg-extras.yaml"
+          else:
+            # Zero hours means cancel. Walking the counter all the way round is
+            # the only way to get back to off from an unknown starting point,
+            # because the remote gives us no absolute "timer off" frame.
+            - repeat:
+                count: !lambda "return presses > 0 ? presses : 25;"
+                then:
+                  - lg_portable_ac.send_frame:
+                      id: ac
+                      frame: !lambda return id(timer_frame);
+                  - delay: 250ms
+            - script.execute: ack_transmit

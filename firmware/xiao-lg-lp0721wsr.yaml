@@ -1,0 +1,96 @@
+# LG LP0721WSR portable air conditioner, controlled over IR by a Seeed Studio
+# XIAO Smart IR Mate.
+#
+# Before flashing:
+#   1. Copy firmware/secrets.yaml.example to firmware/secrets.yaml and fill it
+#      in. Take `api_encryption_key` and `ota_password` from the config your
+#      device is already running, or the OTA update will be rejected.
+#   2. Point `room_temperature_entity` at a temperature sensor you already have
+#      in the room, or delete the `sensor:` block below. The AC does not report
+#      its own temperature, so this is the only way the climate card can show a
+#      current temperature.
+#   3. Work through captures/README.md and confirm the protocol settings under
+#      `climate:` match what tools/decode.py found. The defaults are the
+#      documented LG frame layout, not a verified LP0721WSR capture. See
+#      PROTOCOL.md.
+
+substitutions:
+  name: "xiao-smart-ir-mate"
+  friendly_name: "Portable AC"
+  log_level: "DEBUG"
+  # Keep the raw dumper on: it costs nothing and it is how you compare what we
+  # transmit against what the real remote sends. Set to "none" once happy.
+  ir_dump: "raw"
+  room_temperature_entity: "sensor.living_room_temperature"
+
+packages:
+  hardware: !include packages/xiao-hardware.yaml
+  extras: !include packages/lg-extras.yaml
+
+external_components:
+  # Local checkout. If you are pasting this into Home Assistant's ESPHome
+  # dashboard rather than running it from a clone, swap this for:
+  #
+  #   - source: github://ambercaravalho/ESPHome-LG-LP0721WSR
+  #     components: [lg_portable_ac]
+  #
+  - source:
+      type: local
+      path: ../components
+    components: [lg_portable_ac]
+
+sensor:
+  - platform: homeassistant
+    id: room_temperature
+    entity_id: ${room_temperature_entity}
+    internal: true
+
+climate:
+  - platform: lg_portable_ac
+    id: ac
+    # `None` makes the entity take the device's friendly name, so you get
+    # climate.portable_ac rather than climate.portable_ac_portable_ac.
+    name: None
+    icon: mdi:air-conditioner
+    transmitter_id: ir_tx
+    # Wiring the receiver in is what keeps Home Assistant honest: press the
+    # physical remote and the entity follows, instead of silently drifting.
+    receiver_id: ir_rx
+    sensor: room_temperature
+
+    # LP0721WSR is cooling only. Set true on heat-pump models (LP0721SHR etc).
+    supports_heat: false
+    # Set true only if your unit actually has motorised louvres.
+    supports_swing: false
+
+    # Frame layout and timings. Adjust from tools/decode.py output.
+    frame_bits: 28
+    checksum: nibble_sum
+    header_high: 3200us
+    header_low: 9900us
+    bit_high: 500us
+    bit_one_low: 1600us
+    bit_zero_low: 550us
+
+binary_sensor:
+  # Tap the top of the IR Mate to toggle the AC without a phone.
+  - platform: gpio
+    id: touch_pad
+    pin:
+      number: GPIO5
+      mode: INPUT_PULLDOWN
+    filters:
+      - delayed_on: 30ms
+    on_press:
+      - script.execute: ack_transmit
+      - if:
+          condition:
+            lambda: return id(ac).mode != climate::CLIMATE_MODE_OFF;
+          then:
+            - climate.control:
+                id: ac
+                mode: "OFF"
+          else:
+            - climate.control:
+                id: ac
+                mode: COOL
