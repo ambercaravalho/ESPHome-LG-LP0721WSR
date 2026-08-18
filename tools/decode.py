@@ -563,10 +563,14 @@ def report(frames: Sequence[Frame], timing: Timing, bit_orders: Sequence[str], v
 
     # Every field change also changes the checksum, so knowing where the
     # checksum lives lets us report real fields instead of a field plus its
-    # checksum echo.
+    # checksum echo. When hypotheses of different widths all fit, take the widest:
+    # a narrower guess leaves the remaining checksum bits varying with every
+    # single state change, which then shows up as a phantom run under every field.
+    # Over-excluding is the safer error, because a checksum hypothesis has to hold
+    # across every captured frame to be reported at all.
     checksum_bits: Set[int] = set()
     if all_matches:
-        checksum_width = all_matches[0].checksum_nibbles * 4
+        checksum_width = max(match.checksum_nibbles for match in all_matches) * 4
         checksum_bits = set(range(reference_width - checksum_width, reference_width))
 
     print(banner("FIELD ATTRIBUTION"))
@@ -576,7 +580,9 @@ def report(frames: Sequence[Frame], timing: Timing, bit_orders: Sequence[str], v
         print("  labelled key; see captures/README.md for the matrix that guarantees it.")
     if checksum_bits:
         low, high = min(checksum_bits), max(checksum_bits)
-        print(f"  (bits {low}..{high} are the checksum and are excluded below)")
+        widths = sorted({match.checksum_nibbles * 4 for match in all_matches})
+        note = f", widest of {widths} that fit" if len(widths) > 1 else ""
+        print(f"  (bits {low}..{high} are the checksum{note}, and are excluded below)")
     for key in STATE_KEYS:
         indices = attribution.by_key.get(key)
         if not indices:
