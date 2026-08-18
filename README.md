@@ -14,46 +14,44 @@ climate entity has no room for.
 | --- | --- | --- |
 | Portable AC | `climate` | Power, Cool / Dry / Fan modes, setpoint 16-30 °C, Low / High fan, swing |
 | Display Brightness | `button` | Light button: On → Dim → Off |
-| Swing Toggle | `button` | Louvre swing on models that have it |
-| Delay Timer | `number` | Timer, 1-24 h |
+| Delay Timer | `number` | Timer, 0-24 h, where 0 disarms |
 | Status LED, Vibration, Capture Label | misc | Feedback and capture helpers |
 
 Because the receiver is wired into the climate component, picking up the physical
 remote updates Home Assistant too, instead of leaving the entity showing a stale
-state.
+state. Swing has its own control on the climate entity rather than a separate
+button, because the protocol reports it as a state that can be read back.
 
-## Status: read this before you start
+The Delay Timer is absolute: setting 12 hours is one transmission, where the remote
+needs twelve presses and drops out of timer-setting mode if you pause. Both are
+easier from Home Assistant than from the remote.
 
-**The IR frame format implemented here is not yet confirmed against an actual
-LP0721WSR.** It is the documented LG frame layout, which is validated against LG
-split systems, and this repo reproduces three frames captured from real LG
-hardware exactly, checksum included. But no one has published a decode for the
-`COV36174376` portable remote, so whether the LP-series uses the same layout is
-an open question that only a capture from your unit can answer.
+## Status
 
-Everything needed to answer it is here and tested: a capture firmware, a
-documented capture procedure, and a decoder that prints a drop-in replacement for
-the protocol table. See [PROTOCOL.md](PROTOCOL.md) for exactly what is confirmed
-and what is not.
+**The protocol is measured, not inherited.** Every field is decoded from 90
+captures of this unit's own remote, committed to
+[`captures/`](captures/) so the claims are reproducible.
+[`tools/verify_protocol.py`](tools/verify_protocol.py) re-checks
+[PROTOCOL.md](PROTOCOL.md) against them, including a round-trip test that rebuilds
+each frame from only the fields the component models — so a field we had missed
+would fail the build rather than quietly produce wrong transmissions.
 
-### Try the boring fix first
+What remains untested is listed at the end of PROTOCOL.md, and all of it concerns
+frames the remote physically cannot produce, such as fixed vane positions and
+half-hour timer steps.
 
-ESPHome's `climate_ir_lg` defaults to an 8000 µs / 4000 µs header. Many LG
-remotes, portables included, use roughly 3200 µs / 9900 µs. Wrong header timings
-do not cause an error, the unit just ignores you, which looks identical to
-"unsupported protocol". So before anything else:
+### Why the stock component cannot work
 
-```yaml
-climate:
-  - platform: climate_ir_lg
-    name: "Portable AC"
-    transmitter_id: ir_tx
-    receiver_id: ir_rx
-    header_high: 3200us
-    header_low: 9900us
-```
+Worth stating plainly, because "just fix the header timings" is the usual advice
+for an LG remote that does not respond, and here it cannot help. `climate_ir_lg`
+implements a 28-bit frame with an 8000/4000 µs header, and tuning it to the
+3200/9900 µs some LG remotes use is the standard next step.
 
-If the AC responds, you are done and you do not need this component.
+This remote is neither. It sends **112 bits** behind a **3150/1590 µs** header:
+four times the frame length, with a header space off by a factor of six. A receiver
+looking for the LG protocol does not misdecode these frames, it discards them —
+which is indistinguishable from "unsupported" and is why no amount of configuration
+fixes it.
 
 ## Hardware
 
@@ -116,7 +114,7 @@ checked in so you can prove the analysis pipeline works before touching
 hardware:
 
 ```bash
-python3 tools/decode.py tools/fixtures/example-session.txt --emit-cpp
+python3 tools/decode.py tools/fixtures/example-session.txt --layout
 python3 -m unittest discover -s tools -p 'test_*.py'
 ```
 
@@ -133,20 +131,25 @@ by comparing two captures that differ in exactly one thing. Budget 30 minutes.
 Save the logs into `captures/` and analyse them:
 
 ```bash
-python3 tools/decode.py captures/ --emit-cpp
+python3 tools/decode.py captures/ --layout
 ```
 
 ### 5. Reconcile
 
-Compare the decoder's output against the `PROTOCOL TABLE` block in
-[`components/lg_portable_ac/lg_portable_ac.h`](components/lg_portable_ac/lg_portable_ac.h).
+Only needed if your remote turns out to differ from the one this was measured
+from. Check your captures against the documented layout:
 
-- **Timings differ** → change them in `firmware/xiao-lg-lp0721wsr.yaml`. No
-  recompile of the component needed, they are config options.
-- **Frame length, chunking, or checksum differ** → also just YAML
-  (`frame_bits`, `chunk_bits`, `chunk_gap_low`, `checksum`).
-- **Field positions or command values differ** → paste the generated block over
-  the `PROTOCOL TABLE` in the header.
+```bash
+python3 tools/verify_protocol.py captures/
+```
+
+Silence means your remote matches and there is nothing to do. Otherwise:
+
+- **Timings differ** → change them in `firmware/xiao-lg-lp0721wsr.yaml`. They are
+  config options, so the component does not need recompiling.
+- **Field positions or values differ** → edit the `PROTOCOL TABLE` block in
+  [`components/lg_portable_ac/lg_portable_ac.h`](components/lg_portable_ac/lg_portable_ac.h),
+  which is a small set of named constants rather than a bit-field table.
 
 ### 6. Flash the real firmware
 
@@ -180,36 +183,53 @@ climate:
     receiver_id: ir_rx          # optional, but this is what syncs remote presses
     sensor: room_temperature    # optional, provides "current temperature"
 
-    supports_heat: false        # true on heat-pump models (LP0721SHR)
-    supports_swing: false       # true only if the unit has motorised louvres
+    # Set false on units with a fixed vane, purely to hide the control.
+    supports_swing: true
 
-    frame_bits: 28              # 8-64
-    checksum: nibble_sum        # none | nibble_sum | byte_sum | nibble_xor | byte_xor
-    header_high: 3200us
-    header_low: 9900us
-    bit_high: 500us
-    bit_one_low: 1600us
-    bit_zero_low: 550us
-    chunk_bits: 0               # >0 if the frame is split by a mid-frame gap
-    chunk_gap_low: 8000us
+    # All measured, and all already the defaults. Listed for reference; you only
+    # need them if your own captures disagree.
+    header_high: 3150us
+    header_low: 1590us
+    bit_high: 550us
+    bit_one_low: 1070us
+    bit_zero_low: 290us
     carrier_frequency: 38000Hz
+```
+
+There is no `supports_heat`: the LP0721WSR is cooling only, and the mode byte
+heat-pump variants use has never been captured, so enabling it would transmit a
+guess. Setting it raises a config error rather than silently doing nothing.
+
+### Actions
+
+```yaml
+# Cycle the display brightness, On -> Dim -> Off.
+- lg_portable_ac.light_toggle: ac
+
+# Arm the delay timer, or disarm it with 0. Absolute, not a counter.
+- lg_portable_ac.set_timer:
+    id: ac
+    hours: 8
 ```
 
 ### Sending arbitrary frames
 
-Any frame you discover that does not map onto the climate entity can be bound to
-a button with no recompile:
+For frames the component does not model — a fixed vane position, a Fahrenheit
+setpoint — all fourteen bytes go out as given:
 
 ```yaml
 button:
   - platform: template
-    name: "Display Brightness"
+    name: "Vane position 3"
     on_press:
-      - lg_portable_ac.send_frame:
+      - lg_portable_ac.send_raw_frame:
           id: ac
-          frame: 0x88C00A6
+          frame: [0x23, 0xCB, 0x26, 0x01, 0x00, 0x24, 0x03, 0x07, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x00]
           recalculate_checksum: true   # false to send a captured frame verbatim
 ```
+
+A raw frame does not update the climate entity, so it will disagree with the unit
+until the next state change.
 
 ## Verifying on hardware
 
@@ -218,24 +238,27 @@ Once flashed, with `ir_dump: "raw"` still set:
 1. **Does it respond?** Walk the climate card through off, on, each mode, both
    fan speeds, and the ends of the temperature range. Watch the unit, not just
    Home Assistant.
-2. **Do our frames match the remote's?** The log prints `sending 0x...` for
-   every transmission and `received 0x...` for everything the receiver hears,
-   including our own output. Set the same state twice, once from Home Assistant
-   and once from the remote, and compare the two hex values. They should be
-   identical. If they differ, the differing nibble tells you which field is
-   wrong.
+2. **Do our frames match the remote's?** The log prints `sending` followed by all
+   fourteen bytes for every transmission. Set the same state twice, once from Home
+   Assistant and once from the remote, and compare. They should be byte-identical,
+   and the byte that differs names the field that is wrong.
 3. **Does the remote update Home Assistant?** Change something with the physical
    remote and confirm the entity follows within a second.
-4. **Watch for `checksum mismatch`** warnings in the log. Those mean the frames
-   are being decoded but the checksum hypothesis is wrong.
+4. **Watch for `checksum mismatch`** warnings. Those mean frames are being received
+   and bit-decoded but failing validation, which usually points at receiver
+   saturation rather than the checksum itself; see `captures/README.md`.
+5. **Check the timer both ways.** Set it from Home Assistant and confirm the unit's
+   display agrees, then set it from the remote and confirm the number entity
+   follows. It reads back from received frames, so this exercises both directions.
 
 Set `ir_dump: "none"` and `log_level: "INFO"` when you are happy.
 
 ## Troubleshooting
 
-**The AC ignores everything.** Almost always the header timings. Capture the
-remote and compare. Also confirm the emitters have line of sight to the sensor on
-the front panel of the unit, within about 6 m.
+**The AC ignores everything.** Confirm the emitters have line of sight to the
+sensor on the front panel, within about 6 m. If the log shows frames going out and
+they match what the remote sends byte for byte, the protocol is not the problem and
+it is a range or aiming issue.
 
 **Frames arrive with a varying symbol count.** They are being split or
 truncated. Raise `idle` in `firmware/packages/xiao-hardware.yaml` (capped at
@@ -272,27 +295,31 @@ firmware/
   xiao-lg-lp0721wsr.yaml      Final firmware
   packages/
     xiao-hardware.yaml        Board, radio, IR, LED, haptics (shared)
-    lg-extras.yaml            Light, Swing, Timer entities
+    lg-extras.yaml            Light button and Delay Timer entities
 captures/                     Your logs, plus the capture procedure
 tools/
   parse_raw.py                ESPHome log -> raw frames
-  decode.py                   Raw frames -> timings, fields, checksum, C++ table
-  test_decode.py              Tests for both
+  decode.py                   Raw frames -> timings, fields, checksum, byte layout
+  verify_protocol.py          Asserts PROTOCOL.md against the captures
+  test_decode.py              Tests for the tooling
   fixtures/                   Synthetic session for validating the toolchain
-PROTOCOL.md                   Frame format: what is confirmed, what is not
+PROTOCOL.md                   Frame format, and the evidence for each field
 ```
 
 ## Development
 
 ```bash
 python3 -m unittest discover -s tools -p 'test_*.py'
+python3 tools/verify_protocol.py
 esphome config firmware/xiao-lg-lp0721wsr.yaml
 esphome compile firmware/xiao-lg-lp0721wsr.yaml
 ```
 
-The test suite pins the protocol table against frames captured from real LG
-hardware, so changing a field shift, a command value, or the checksum without
-updating the tests will fail.
+`verify_protocol.py` is the one that matters when touching the protocol. Beyond
+checking each field, it rebuilds every captured frame from only the fields the
+component models and requires a byte-for-byte match, so a field nobody noticed
+fails the check rather than quietly producing transmissions that differ from the
+remote's.
 
 ## Licence
 

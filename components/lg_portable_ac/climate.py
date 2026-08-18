@@ -9,9 +9,14 @@ CODEOWNERS = ["@ambercaravalho"]
 
 lg_portable_ac_ns = cg.esphome_ns.namespace("lg_portable_ac")
 LgPortableAcClimate = lg_portable_ac_ns.class_("LgPortableAcClimate", climate_ir.ClimateIR)
-ChecksumType = lg_portable_ac_ns.enum("ChecksumType")
-SendFrameAction = lg_portable_ac_ns.class_(
-    "SendFrameAction", automation.Action, cg.Parented.template(LgPortableAcClimate)
+SendRawFrameAction = lg_portable_ac_ns.class_(
+    "SendRawFrameAction", automation.Action, cg.Parented.template(LgPortableAcClimate)
+)
+SetTimerAction = lg_portable_ac_ns.class_(
+    "SetTimerAction", automation.Action, cg.Parented.template(LgPortableAcClimate)
+)
+LightToggleAction = lg_portable_ac_ns.class_(
+    "LightToggleAction", automation.Action, cg.Parented.template(LgPortableAcClimate)
 )
 
 CONF_HEADER_HIGH = "header_high"
@@ -19,37 +24,35 @@ CONF_HEADER_LOW = "header_low"
 CONF_BIT_HIGH = "bit_high"
 CONF_BIT_ONE_LOW = "bit_one_low"
 CONF_BIT_ZERO_LOW = "bit_zero_low"
-CONF_FRAME_BITS = "frame_bits"
-CONF_CHUNK_BITS = "chunk_bits"
-CONF_CHUNK_GAP_LOW = "chunk_gap_low"
-CONF_CHECKSUM = "checksum"
 CONF_SUPPORTS_SWING = "supports_swing"
 CONF_FRAME = "frame"
 CONF_RECALCULATE_CHECKSUM = "recalculate_checksum"
+CONF_HOURS = "hours"
 
-CHECKSUM_TYPES = {
-    "none": ChecksumType.CHECKSUM_NONE,
-    "nibble_sum": ChecksumType.CHECKSUM_NIBBLE_SUM,
-    "byte_sum": ChecksumType.CHECKSUM_BYTE_SUM,
-    "nibble_xor": ChecksumType.CHECKSUM_NIBBLE_XOR,
-    "byte_xor": ChecksumType.CHECKSUM_BYTE_XOR,
-}
+# Frames are a fixed 14 bytes; anything else is a mistake worth catching in
+# validation rather than at runtime.
+FRAME_BYTES = 14
+TIMER_MAX_HOURS = 24
 
 
-def validate_frame(config):
-    """The chunk size has to actually divide the frame into more than one piece."""
-    chunk_bits = config[CONF_CHUNK_BITS]
-    if chunk_bits and chunk_bits >= config[CONF_FRAME_BITS]:
-        raise cv.Invalid(
-            f"{CONF_CHUNK_BITS} ({chunk_bits}) must be smaller than "
-            f"{CONF_FRAME_BITS} ({config[CONF_FRAME_BITS]}), or 0 to disable chunking",
-            path=[CONF_CHUNK_BITS],
-        )
+def validate_config(config):
+    """A one is the *longer* space, so swapping the two silently inverts every bit."""
     if config[CONF_BIT_ONE_LOW] <= config[CONF_BIT_ZERO_LOW]:
         raise cv.Invalid(
             f"{CONF_BIT_ONE_LOW} must be longer than {CONF_BIT_ZERO_LOW}; "
             "a one is encoded as the longer space",
             path=[CONF_BIT_ONE_LOW],
+        )
+    # Inherited from climate_ir, where it defaults to true. Rejecting it beats
+    # accepting it and quietly doing nothing, which is what would happen: the
+    # mode byte for heat has never been captured, so there is no frame to send.
+    if config[CONF_SUPPORTS_HEAT]:
+        raise cv.Invalid(
+            "heat is not supported: the LP0721WSR is cooling only, and the mode "
+            "byte used by heat-pump variants such as the LP0721SHR has not been "
+            "captured, so enabling this would transmit a guess. Capture a heat "
+            "frame and add it to the component first; see PROTOCOL.md",
+            path=[CONF_SUPPORTS_HEAT],
         )
     return config
 
@@ -57,66 +60,95 @@ def validate_frame(config):
 CONFIG_SCHEMA = cv.All(
     climate_ir.climate_ir_with_receiver_schema(LgPortableAcClimate).extend(
         {
-            # The LP0721WSR is cooling only. Heat-pump variants such as the
-            # LP0721SHR need supports_heat: true.
+            # Set false to hide the swing control on units with a fixed vane.
+            # Harmless to leave on: the bits are simply ignored by such a unit.
+            cv.Optional(CONF_SUPPORTS_SWING, default=True): cv.boolean,
             cv.Optional(CONF_SUPPORTS_HEAT, default=False): cv.boolean,
-            cv.Optional(CONF_SUPPORTS_SWING, default=False): cv.boolean,
-            # Timings. These default to the LG "long header" family (~3.2ms mark
-            # followed by a ~9.9ms space), which is what portable and many
-            # recent split remotes use. ESPHome's built-in climate_ir_lg
-            # defaults to the older 8ms/4ms header instead, and getting this
-            # wrong is the single most common reason an LG unit ignores you.
+            # Measured from the LP0721WSR remote across 86 captures. These are
+            # not the LG defaults and not inherited from another model: the
+            # header space in particular is ~1590us, where other LG remotes use
+            # ~4000us or ~9900us. See PROTOCOL.md.
             cv.Optional(
-                CONF_HEADER_HIGH, default="3200us"
+                CONF_HEADER_HIGH, default="3150us"
             ): cv.positive_time_period_microseconds,
             cv.Optional(
-                CONF_HEADER_LOW, default="9900us"
+                CONF_HEADER_LOW, default="1590us"
             ): cv.positive_time_period_microseconds,
-            cv.Optional(CONF_BIT_HIGH, default="500us"): cv.positive_time_period_microseconds,
+            cv.Optional(CONF_BIT_HIGH, default="550us"): cv.positive_time_period_microseconds,
             cv.Optional(
-                CONF_BIT_ONE_LOW, default="1600us"
+                CONF_BIT_ONE_LOW, default="1070us"
             ): cv.positive_time_period_microseconds,
             cv.Optional(
-                CONF_BIT_ZERO_LOW, default="550us"
+                CONF_BIT_ZERO_LOW, default="290us"
             ): cv.positive_time_period_microseconds,
-            cv.Optional(CONF_FRAME_BITS, default=28): cv.int_range(min=8, max=64),
-            # Some LG AC frames are split into chunks separated by a long gap.
-            # 0 disables it, which is right for the 28-bit frame.
-            cv.Optional(CONF_CHUNK_BITS, default=0): cv.int_range(min=0, max=64),
-            cv.Optional(
-                CONF_CHUNK_GAP_LOW, default="8000us"
-            ): cv.positive_time_period_microseconds,
-            cv.Optional(CONF_CHECKSUM, default="nibble_sum"): cv.enum(
-                CHECKSUM_TYPES, lower=True
-            ),
             cv.Optional(CONF_CARRIER_FREQUENCY, default="38000Hz"): cv.All(
                 cv.frequency, cv.int_
             ),
         }
     ),
-    validate_frame,
+    validate_config,
 )
 
 
-SEND_FRAME_ACTION_SCHEMA = cv.Schema(
+SEND_RAW_FRAME_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.use_id(LgPortableAcClimate),
-        cv.Required(CONF_FRAME): cv.templatable(cv.hex_uint64_t),
+        cv.Required(CONF_FRAME): cv.All(
+            [cv.hex_uint8_t], cv.Length(min=FRAME_BYTES, max=FRAME_BYTES)
+        ),
         cv.Optional(CONF_RECALCULATE_CHECKSUM, default=True): cv.templatable(cv.boolean),
     }
 )
 
 
 @automation.register_action(
-    "lg_portable_ac.send_frame", SendFrameAction, SEND_FRAME_ACTION_SCHEMA
+    "lg_portable_ac.send_raw_frame",
+    SendRawFrameAction,
+    SEND_RAW_FRAME_SCHEMA,
+    synchronous=True,
 )
-async def send_frame_action_to_code(config, action_id, template_arg, args):
+async def send_raw_frame_action_to_code(config, action_id, template_arg, args):
     var = cg.new_Pvariable(action_id, template_arg)
     await cg.register_parented(var, config[CONF_ID])
-    frame = await cg.templatable(config[CONF_FRAME], args, cg.uint64)
-    cg.add(var.set_frame(frame))
+    cg.add(var.set_frame(config[CONF_FRAME]))
     recalculate = await cg.templatable(config[CONF_RECALCULATE_CHECKSUM], args, bool)
     cg.add(var.set_recalculate_checksum(recalculate))
+    return var
+
+
+SET_TIMER_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.use_id(LgPortableAcClimate),
+        cv.Required(CONF_HOURS): cv.templatable(cv.int_range(min=0, max=TIMER_MAX_HOURS)),
+    }
+)
+
+
+@automation.register_action(
+    "lg_portable_ac.set_timer", SetTimerAction, SET_TIMER_SCHEMA, synchronous=True
+)
+async def set_timer_action_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
+    hours = await cg.templatable(config[CONF_HOURS], args, cg.uint8)
+    cg.add(var.set_hours(hours))
+    return var
+
+
+LIGHT_TOGGLE_SCHEMA = automation.maybe_simple_id(
+    {cv.GenerateID(): cv.use_id(LgPortableAcClimate)}
+)
+
+
+@automation.register_action(
+    "lg_portable_ac.light_toggle",
+    LightToggleAction,
+    LIGHT_TOGGLE_SCHEMA,
+    synchronous=True,
+)
+async def light_toggle_action_to_code(config, action_id, template_arg, args):
+    var = cg.new_Pvariable(action_id, template_arg)
+    await cg.register_parented(var, config[CONF_ID])
     return var
 
 
@@ -128,9 +160,5 @@ async def to_code(config):
     cg.add(var.set_bit_high(config[CONF_BIT_HIGH]))
     cg.add(var.set_bit_one_low(config[CONF_BIT_ONE_LOW]))
     cg.add(var.set_bit_zero_low(config[CONF_BIT_ZERO_LOW]))
-    cg.add(var.set_frame_bits(config[CONF_FRAME_BITS]))
-    cg.add(var.set_chunk_bits(config[CONF_CHUNK_BITS]))
-    cg.add(var.set_chunk_gap_low(config[CONF_CHUNK_GAP_LOW]))
-    cg.add(var.set_checksum_type(config[CONF_CHECKSUM]))
     cg.add(var.set_supports_swing(config[CONF_SUPPORTS_SWING]))
     cg.add(var.set_carrier_frequency(config[CONF_CARRIER_FREQUENCY]))

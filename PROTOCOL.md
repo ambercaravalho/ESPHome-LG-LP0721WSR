@@ -2,7 +2,7 @@
 
 ## Status
 
-Measured from 86 captures of the original remote, recorded with
+Measured from 90 captures of the original remote, recorded with
 [`firmware/xiao-ir-capture.yaml`](firmware/xiao-ir-capture.yaml) and analysed with
 [`tools/decode.py`](tools/decode.py). The raw session is committed as
 [`captures/session-01.txt`](captures/session-01.txt) so every claim here is
@@ -10,7 +10,7 @@ reproducible.
 
 | Item | Status |
 | --- | --- |
-| Framing and pulse timings | **Measured**, 86 captures |
+| Framing and pulse timings | **Measured**, 90 captures |
 | Frame length: 112 bits / 14 bytes | **Measured** |
 | Byte order: LSB-first | **Measured** — the checksum only closes in this reading |
 | Statefulness: every frame carries the full state | **Measured**, no toggle or sequence bit |
@@ -23,6 +23,7 @@ reproducible.
 | Timer, 1–24 h | **Measured** across the entire range |
 | Light | **Measured** — a pure toggle, one frame, no readable state |
 | Swing | **Measured** — a real state in byte 8, on and off |
+| Fahrenheit display | **Measured** — byte 12 carries the F setpoint |
 | Byte 8 bit `0x40` | **Observed**; probably the remote's timer-setting mode, see below |
 
 ## Why the stock component cannot work
@@ -85,7 +86,8 @@ is only useful for spotting the bit order in the first place.
 | 7 | Temperature | `31 − °C`, so 16 °C is `0x0F` and 30 °C is `0x01` |
 | 8 | Fan, swing, timer mode | Fan `0x07`: Low `0x02`, High `0x05`. Swing `0x38`: off `0`, on `7` |
 | 9 | Timer | Ten-minute units: hours × 6. `0` = off |
-| 10–12 | Constant | Zero in all 86 captures |
+| 10–11 | Constant | Zero in all 90 captures |
+| 12 | Fahrenheit setpoint | `0` in Celsius mode, else `0x80 \| °F` |
 | 13 | Checksum | See below |
 
 Power and mode are independent: an off frame keeps the mode, temperature and fan
@@ -140,6 +142,38 @@ settle it.
 Only `0x45` was captured, never `0x42`, because every timer capture was at fan
 High. A frame combining the timer with fan Low is therefore predicted rather than
 observed.
+
+## Fahrenheit display
+
+Switching the remote's display to Fahrenheit brings byte 12 to life. It is zero in
+Celsius mode and `0x80 | °F` otherwise:
+
+```
+75F  23 CB 26 01 00 24 03 07 05 00 00 00 CB 13
+76F  23 CB 26 01 00 24 03 07 05 00 00 00 CC 14
+77F  23 CB 26 01 00 24 03 06 05 00 00 00 CD 14
+78F  23 CB 26 01 00 24 03 05 05 00 00 00 CE 14
+```
+
+Byte 7 keeps carrying the Celsius setpoint throughout, rounded: 75F and 76F both
+map to 24C, 77F to 25C, 78F to 26C. The two bytes therefore agree but are not
+redundant, because **1 °F is a finer step than 1 °C**. Four consecutive presses
+produce four distinct byte 12 values but only three distinct byte 7 values.
+
+This was briefly mistaken for a sequence counter, which is worth recording as a
+caution: byte 12 incremented by exactly one on each of four consecutive frames,
+which looks conclusive until you notice one press equals one degree Fahrenheit. A
+per-frame counter would have contradicted the statefulness the rest of this
+document depends on, so the distinction matters.
+
+The interesting consequence is that Fahrenheit mode is the finer-grained control
+surface. Whether the unit acts on byte 12 or merely displays it is untested — byte
+7 was consistent in all four captures, so nothing here distinguishes them. If the
+unit does honour byte 12, transmitting it would give roughly 0.56 °C resolution
+instead of 1 °C.
+
+This component transmits byte 12 as zero, matching the 87 Celsius-mode captures,
+which is the known-good behaviour.
 
 ## Swing
 
@@ -198,7 +232,7 @@ are never one nibble apart and cannot be confused.
 byte13 = (byte0 + byte1 + ... + byte12) & 0xFF
 ```
 
-Consistent across all 86 captures, and now the **only** algorithm that fits. Three
+Consistent across all 90 captures, and now the **only** algorithm that fits. Three
 worked examples:
 
 ```
@@ -236,25 +270,31 @@ rather than capture:
    test described above.
 4. **Heat.** Not applicable to the LP0721WSR, which is cooling only. The mode
    nibble has room for it on `SHR` variants.
-5. **Bytes 10–12, and byte 8's `0x80`.** Constant across all 86 captures. Nothing
+5. **Whether byte 12 is acted on or merely displayed.** If the unit honours it,
+   Fahrenheit mode offers a finer setpoint step than Celsius.
+6. **Bytes 10–11, and byte 8's `0x80`.** Constant across all 90 captures. Nothing
    on this remote drives them.
 
 ## Escape hatch
 
-Any frame you discover that does not fit the climate entity can be bound to a
-button without touching C++:
+Light, Swing and the Timer are all first-class now, so this is no longer needed for
+them. It exists for the untested corners above — a fixed vane position, a half-hour
+timer, a Fahrenheit setpoint — and for anything a different LP-series remote turns
+out to send:
 
 ```yaml
 button:
   - platform: template
-    name: "Display Brightness"
+    name: "Vane position 3"
     on_press:
-      - lg_portable_ac.send_frame:
+      # Cool, 24C, fan High, swing field set to 3 instead of 0 or 7.
+      - lg_portable_ac.send_raw_frame:
           id: ac
-          frame: 0x...
+          frame: [0x23, 0xCB, 0x26, 0x01, 0x00, 0x24, 0x03, 0x07, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x00]
 ```
 
-`send_frame` recomputes the checksum by default. Pass
-`recalculate_checksum: false` to transmit a captured frame byte for byte.
-[`firmware/packages/lg-extras.yaml`](firmware/packages/lg-extras.yaml) uses this
-for Light, Swing and the Timer.
+All fourteen bytes are required, since 112 bits does not fit in an integer.
+`send_raw_frame` recomputes the checksum by default, so the last byte can be left
+at zero; pass `recalculate_checksum: false` to transmit a captured frame byte for
+byte. Note that a raw frame is transmitted as given and does not update the climate
+entity, so the entity will disagree with the unit until the next state change.

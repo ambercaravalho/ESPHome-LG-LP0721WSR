@@ -34,7 +34,13 @@ SPACE_ONE = 1060
 SPACE_ZERO = 280
 
 CONSTANT_PREFIX = [0x23, 0xCB, 0x26, 0x01, 0x00]
-CONSTANT_TAIL = [0x00, 0x00, 0x00]  # bytes 10-12; byte 9 is the timer
+CONSTANT_TAIL = [0x00, 0x00]  # bytes 10-11; byte 9 is the timer, byte 12 Fahrenheit
+# Byte 12 is zero while the remote displays Celsius, and 0x80 | degrees Fahrenheit
+# once you switch the display over. Byte 7 keeps carrying the rounded Celsius
+# equivalent either way, so it stays authoritative.
+FAHRENHEIT_FLAG = 0x80
+FAHRENHEIT_MASK = 0x7F
+FAHRENHEIT_MIN, FAHRENHEIT_MAX = 60, 90
 POWER_BASE = 0x20
 POWER_BIT = 0x04
 TIMER_BIT = 0x08  # byte 5, set while a timer is armed
@@ -80,6 +86,40 @@ class NoiseBurst(ValueError):
     """A capture far too short to be a frame, e.g. a stray reflection or sunlight."""
 
 
+def reencode(by: List[int]) -> List[int]:
+    """Rebuild a frame from only the fields the component models.
+
+    This is the completeness check, and a stronger claim than decoding each field
+    correctly: if every captured frame can be reconstructed from power, mode,
+    setpoint, fan, swing, timer and the two press flags alone, then those fields
+    exhaust the frame and there is no field left that we have failed to notice.
+    A mismatch means the remote encodes something we are not tracking, which
+    would make our transmissions differ from its in a way no amount of field-by-
+    field checking would reveal.
+    """
+    out = list(CONSTANT_PREFIX) + [0] * 9
+
+    powered = bool(by[5] & POWER_BIT)
+    armed = bool(by[5] & TIMER_BIT)
+    light = bool(by[5] & LIGHT_BIT)
+    out[5] = POWER_BASE | (POWER_BIT if powered else 0) | (TIMER_BIT if armed else 0)
+    out[5] |= LIGHT_BIT if light else 0
+
+    out[6] = by[6]  # mode, checked against MODES separately
+    out[7] = by[7]  # setpoint, range-checked separately
+
+    swing = (by[8] & SWING_MASK) >> SWING_SHIFT
+    out[8] = (by[8] & FAN_MASK) | (swing << SWING_SHIFT)
+    # The remote's timer-setting mode. Deliberately never set by the component,
+    # but it has to be carried here or the frames it appears on would not rebuild.
+    out[8] |= by[8] & TIMER_FLAG
+
+    out[9] = (by[9] // TIMER_UNITS_PER_HOUR) * TIMER_UNITS_PER_HOUR if armed else 0
+    out[12] = by[12]  # Fahrenheit setpoint, cross-checked against byte 7 above
+    out[13] = sum(out[:13]) & 0xFF
+    return out
+
+
 def check(capture: Capture) -> List[str]:
     try:
         by = frame_bytes(capture)
@@ -92,8 +132,8 @@ def check(capture: Capture) -> List[str]:
 
     if by[:5] != CONSTANT_PREFIX:
         problems.append(f"prefix is {by[:5]}, expected {CONSTANT_PREFIX}")
-    if by[10:13] != CONSTANT_TAIL:
-        problems.append(f"bytes 10-12 are {by[10:13]}, expected zero")
+    if by[10:12] != CONSTANT_TAIL:
+        problems.append(f"bytes 10-11 are {by[10:12]}, expected zero")
     expected_sum = sum(by[:13]) & 0xFF
     if by[13] != expected_sum:
         problems.append(f"checksum {by[13]:#04x}, expected {expected_sum:#04x}")
@@ -119,6 +159,23 @@ def check(capture: Capture) -> List[str]:
         )
     if by[9] % TIMER_UNITS_PER_HOUR or by[9] > TIMER_MAX:
         problems.append(f"byte 9 is {by[9]:#04x}, not a whole hour in 1-24")
+
+    # Fahrenheit display mode. The two setpoint bytes must agree, which is what
+    # makes this a real check rather than just a range test: 1F steps are finer
+    # than 1C, so several F values share a C value and the mapping is not free.
+    if by[12]:
+        if not by[12] & FAHRENHEIT_FLAG:
+            problems.append(f"byte 12 is {by[12]:#04x} without the Fahrenheit flag")
+        fahrenheit = by[12] & FAHRENHEIT_MASK
+        if not FAHRENHEIT_MIN <= fahrenheit <= FAHRENHEIT_MAX:
+            problems.append(f"byte 12 decodes to {fahrenheit}F, outside a plausible range")
+        else:
+            celsius = int((fahrenheit - 32) * 5 / 9 + 0.5)
+            if TEMP_OFFSET - by[7] != celsius:
+                problems.append(
+                    f"byte 12 says {fahrenheit}F ({celsius}C) but byte 7 says "
+                    f"{TEMP_OFFSET - by[7]}C"
+                )
 
     # Cross-check against the label, where one exists.
     meta = capture.meta
@@ -146,6 +203,16 @@ def check(capture: Capture) -> List[str]:
         want = SWING_ON if meta["swing"] == "on" else 0
         if swing != want:
             problems.append(f"byte 8 swing field is {swing:#x}, label says swing={meta['swing']}")
+    if "temp_f" in meta:
+        try:
+            labelled_f = int(meta["temp_f"])
+        except ValueError:
+            problems.append(f"unparseable temp_f={meta['temp_f']}")
+        else:
+            if by[12] & FAHRENHEIT_MASK != labelled_f:
+                problems.append(
+                    f"byte 12 says {by[12] & FAHRENHEIT_MASK}F, label says {labelled_f}F"
+                )
 
     # Light is the one button whose bit we can check in both directions, since the
     # frame is otherwise an ordinary state frame. A mismatch either way means the
@@ -155,6 +222,15 @@ def check(capture: Capture) -> List[str]:
         problems.append(
             f"byte 5 light bit is {'set' if lit else 'clear'}, "
             f"label says button={meta.get('button', 'none')}"
+        )
+
+    rebuilt = reencode(by)
+    if rebuilt != by:
+        diff = [i for i, (a, b) in enumerate(zip(rebuilt, by)) if a != b]
+        problems.append(
+            f"does not rebuild from the modelled fields; bytes {diff} differ "
+            f"(got {[f'{rebuilt[i]:#04x}' for i in diff]}, "
+            f"expected {[f'{by[i]:#04x}' for i in diff]})"
         )
 
     return problems

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cinttypes>
 
 #include "esphome/components/climate_ir/climate_ir.h"
@@ -9,179 +10,198 @@
 namespace esphome {
 namespace lg_portable_ac {
 
-/// Algorithm used to compute the trailing checksum field.
-enum ChecksumType : uint8_t {
-  CHECKSUM_NONE = 0,
-  CHECKSUM_NIBBLE_SUM,
-  CHECKSUM_BYTE_SUM,
-  CHECKSUM_NIBBLE_XOR,
-  CHECKSUM_BYTE_XOR,
-};
-
-/// A field inside the frame: `width` bits whose least significant bit sits at
-/// `shift`, counting from the *last* transmitted bit. Measuring from the end
-/// rather than the start means the table below stays valid if the frame turns
-/// out to be longer than the default, because extra bytes are prepended.
-struct BitField {
-  uint8_t shift;
-  uint8_t width;
-
-  uint64_t value_mask() const { return (1ULL << this->width) - 1ULL; }
-  uint64_t frame_mask() const { return this->value_mask() << this->shift; }
-  uint64_t get(uint64_t frame) const { return (frame >> this->shift) & this->value_mask(); }
-  void set(uint64_t &frame, uint64_t value) const {
-    frame = (frame & ~this->frame_mask()) | ((value & this->value_mask()) << this->shift);
-  }
-};
-
 // ===========================================================================
 // PROTOCOL TABLE
 // ===========================================================================
-// This is the documented LG air-conditioner frame layout: an 0x88 signature, a
-// command byte that folds the power state together with the operating mode, a
-// temperature nibble, a fan nibble, and a checksum nibble.
+// Measured from 86 captures of the original LP0721WSR remote. Every value here
+// is observed, not inherited from another LG model, and PROTOCOL.md records the
+// evidence for each one. tools/verify_protocol.py re-checks these against the
+// committed captures.
 //
-// CONFIRMED for LG split systems (this is what ESPHome's built-in
-// `climate_ir_lg` implements, and it is field-tested against real hardware).
+// A frame is 14 bytes sent least significant bit first:
 //
-// NOT YET CONFIRMED for the LP-series portables. If your captures disagree,
-// this block plus the timings in `climate.py` are the only things that need to
-// change. `python3 tools/decode.py captures/ --emit-cpp` prints a replacement
-// for this block directly. See PROTOCOL.md for the reasoning and the current
-// state of the evidence.
+//   byte   0  1  2  3  4   5     6     7     8     9    10 11 12   13
+//         23 CB 26 01 00  flg  mode  temp  fan+  timer  00 00 00  cksum
+//
+// The protocol is fully stateful: every frame carries the complete state, so
+// there are no incremental or toggle commands to track. Light is the sole
+// exception, being a press the unit acts on rather than a state it stores.
 // ---------------------------------------------------------------------------
 
-static const uint8_t SIGNATURE_WIDTH = 8;
-static const uint64_t SIGNATURE = 0x88;
+static const uint8_t FRAME_BYTES = 14;
+static const uint8_t FRAME_BITS = FRAME_BYTES * 8;
 
-static const BitField FIELD_COMMAND = {12, 8};
-static const BitField FIELD_TEMPERATURE = {8, 4};
-static const BitField FIELD_FAN = {4, 4};
-static const BitField FIELD_CHECKSUM = {0, 4};
+/// Byte offsets of the fields that carry state.
+enum FrameIndex : uint8_t {
+  IDX_FLAGS = 5,
+  IDX_MODE = 6,
+  IDX_TEMPERATURE = 7,
+  IDX_FAN = 8,
+  IDX_TIMER = 9,
+  IDX_FAHRENHEIT = 12,
+  IDX_CHECKSUM = 13,
+};
 
-// Command byte. LG distinguishes "switch on into mode X" from "change to mode X
-// while already running", so the same requested mode produces a different frame
-// depending on what the unit was doing before.
-static const uint8_t CMD_OFF = 0xC0;
-static const uint8_t CMD_SWING = 0x10;
+/// Bytes 0-4, identical in every frame ever captured. Used to reject frames
+/// from other remotes before trusting anything else in them.
+static const uint8_t PREFIX_BYTES = 5;
+static const uint8_t PREFIX[PREFIX_BYTES] = {0x23, 0xCB, 0x26, 0x01, 0x00};
 
-static const uint8_t CMD_ON_COOL = 0x00;
-static const uint8_t CMD_ON_DRY = 0x01;
-static const uint8_t CMD_ON_FAN_ONLY = 0x02;
-static const uint8_t CMD_ON_HEAT = 0x04;
+// Byte 5. A flag byte, not a command: power, mode and timer are independent, so
+// an off frame keeps the mode, temperature and fan of the state it was in.
+static const uint8_t FLAGS_BASE = 0x20;   ///< Set in every captured frame.
+static const uint8_t FLAG_POWER = 0x04;   ///< Clear means off.
+static const uint8_t FLAG_TIMER = 0x08;   ///< Set while a timer is armed.
+static const uint8_t FLAG_LIGHT = 0x40;   ///< Marks a Light press; see below.
 
-static const uint8_t CMD_COOL = 0x08;
-static const uint8_t CMD_DRY = 0x09;
-static const uint8_t CMD_FAN_ONLY = 0x0A;
-static const uint8_t CMD_HEAT = 0x0C;
+// Byte 6. The Mode button cycles these three; the LP0721WSR has no auto mode
+// and no heat. Heat exists on SHR variants but its value is unknown, so this
+// component does not offer it rather than guessing.
+static const uint8_t MODE_COOL = 0x03;
+static const uint8_t MODE_DRY = 0x02;
+static const uint8_t MODE_FAN_ONLY = 0x07;
 
-// Fan nibble. The LP-series has only two speeds, so MEDIUM and AUTO are listed
-// for decoding frames from other LG remotes but are never transmitted.
-static const uint8_t FAN_LOW = 0x0;
-static const uint8_t FAN_MEDIUM = 0x2;
-static const uint8_t FAN_HIGH = 0x4;
-static const uint8_t FAN_AUTO = 0x5;
-
-// The "cycle display brightness" frame reuses the OFF command byte and differs
-// only in its fan nibble (0x88C00A6 versus 0x88C0051 for a real power-off).
-// Mistaking one for the other is esphome/issues#2101.
-static const uint8_t FAN_LIGHT_TOGGLE = 0xA;
-
-// The temperature nibble holds (celsius - TEMPERATURE_OFFSET).
-static const uint8_t TEMPERATURE_OFFSET = 15;
-
+// Byte 7. The setpoint counts *down*: 16C is 0x0F and 30C is 0x01.
+static const uint8_t TEMPERATURE_BASE = 31;
 static const float TEMPERATURE_MIN_C = 16.0f;
 static const float TEMPERATURE_MAX_C = 30.0f;
 static const float TEMPERATURE_STEP_C = 1.0f;
 
+// Byte 8 is packed rather than being a plain fan byte.
+static const uint8_t FAN_MASK = 0x07;
+static const uint8_t FAN_LOW = 0x02;
+static const uint8_t FAN_HIGH = 0x05;
+static const uint8_t SWING_MASK = 0x38;
+static const uint8_t SWING_SHIFT = 3;
+static const uint8_t SWING_OFF_VALUE = 0x00;
+static const uint8_t SWING_ON_VALUE = 0x07;
+/// Set on frames the remote sends while its timer-setting mode is open. It is
+/// the remote's own UI state and clears when that mode times out, so we never
+/// set it ourselves. Masked off when decoding so it cannot be read as fan or
+/// swing data.
+static const uint8_t FAN_BYTE_REMOTE_TIMER_MODE = 0x40;
+
+// Byte 9 counts ten-minute units, so an hour is 6. The remote only ever emits
+// whole hours; finer values are accepted by this component but untested against
+// the hardware.
+static const uint8_t TIMER_UNITS_PER_HOUR = 6;
+static const uint8_t TIMER_MAX_HOURS = 24;
+static const uint8_t TIMER_OFF = 0;
+
+// Byte 12 is zero while the remote shows Celsius and 0x80 | degrees Fahrenheit
+// once its display is switched over. Byte 7 carries the rounded Celsius setpoint
+// either way, so decoding can rely on byte 7 alone. We transmit zero here, which
+// is what the remote does in Celsius mode and what all but four captures show.
+static const uint8_t FAHRENHEIT_FLAG = 0x80;
+static const uint8_t FAHRENHEIT_MASK = 0x7F;
+
 // ===========================================================================
+
+/// One complete frame, checksum included.
+using Frame = std::array<uint8_t, FRAME_BYTES>;
 
 class LgPortableAcClimate : public climate_ir::ClimateIR {
  public:
   LgPortableAcClimate()
       : climate_ir::ClimateIR(TEMPERATURE_MIN_C, TEMPERATURE_MAX_C, TEMPERATURE_STEP_C,
                               /* supports_dry */ true, /* supports_fan_only */ true,
-                              {climate::CLIMATE_FAN_LOW, climate::CLIMATE_FAN_HIGH}) {}
+                              {climate::CLIMATE_FAN_LOW, climate::CLIMATE_FAN_HIGH},
+                              {climate::CLIMATE_SWING_OFF, climate::CLIMATE_SWING_VERTICAL}) {
+    // ClimateIR defaults this on, and it is not a config option here: the mode
+    // byte for heat is unknown, so offering the mode would mean transmitting a
+    // guess. SHR owners need a capture first.
+    this->supports_heat_ = false;
+  }
 
   void set_header_high(uint32_t value) { this->header_high_ = value; }
   void set_header_low(uint32_t value) { this->header_low_ = value; }
   void set_bit_high(uint32_t value) { this->bit_high_ = value; }
   void set_bit_one_low(uint32_t value) { this->bit_one_low_ = value; }
   void set_bit_zero_low(uint32_t value) { this->bit_zero_low_ = value; }
-  void set_frame_bits(uint8_t value) { this->frame_bits_ = value; }
-  void set_chunk_bits(uint8_t value) { this->chunk_bits_ = value; }
-  void set_chunk_gap_low(uint32_t value) { this->chunk_gap_low_ = value; }
-  void set_checksum_type(ChecksumType value) { this->checksum_type_ = value; }
   void set_supports_swing(bool value) { this->supports_swing_ = value; }
   void set_carrier_frequency(uint32_t value) { this->carrier_frequency_ = value; }
 
   void dump_config() override;
 
-  /** Transmit an arbitrary frame.
+  /** Cycle the display brightness: On -> Dim -> Off, one step per press.
    *
-   * The remote has buttons that do not map onto a climate entity at all: Light
-   * cycles the display brightness, Timer counts hours, and on some models Swing
-   * steps through louvre positions. Rather than inventing entities for each, this
-   * lets any frame you discover during capture be bound to a button or select in
-   * YAML, with no recompile. Set `recalculate_checksum` false to send a captured
-   * frame byte for byte.
+   * The unit walks the cycle internally and the frame carries no brightness
+   * value, so there is nothing to read back and no way to ask for a specific
+   * level. That makes this a button, not a select.
    */
-  void send_frame(uint64_t frame, bool recalculate_checksum);
+  void send_light_toggle();
+
+  /** Arm the delay timer, or disarm it with zero hours.
+   *
+   * Absolute, not a counter: the frame states the whole value, so setting 12
+   * hours is one transmission rather than twelve button presses.
+   */
+  void set_timer_hours(uint8_t hours);
+  uint8_t get_timer_hours() const { return this->timer_hours_; }
+
+  /** Transmit an arbitrary 14-byte frame.
+   *
+   * An escape hatch for frames this component does not model, such as the fixed
+   * vane positions the swing field looks wide enough to hold. The checksum is
+   * recomputed unless you ask for the bytes to go out untouched.
+   */
+  void send_raw_frame(const std::vector<uint8_t> &bytes, bool recalculate_checksum);
 
  protected:
   climate::ClimateTraits traits() override;
-  void control(const climate::ClimateCall &call) override;
   void transmit_state() override;
   bool on_receive(remote_base::RemoteReceiveData data) override;
 
   /// Build the frame for the current entity state, checksum included.
-  uint64_t encode_state_();
-  /// Apply a received frame to the entity state. False if it is not for us.
-  bool decode_frame_(uint64_t frame);
+  Frame encode_state_();
+  /// Apply a received frame to the entity state. False if it is not ours.
+  bool decode_frame_(const Frame &frame);
   /// Put the pulse train for `frame` on the wire.
-  void transmit_frame_(uint64_t frame);
+  void transmit_frame_(const Frame &frame);
 
-  uint64_t compute_checksum_(uint64_t frame) const;
-  void apply_checksum_(uint64_t &frame) const;
-  bool checksum_valid_(uint64_t frame) const;
+  static uint8_t checksum_(const Frame &frame);
+  static bool prefix_valid_(const Frame &frame);
 
-  uint8_t command_for_mode_(climate::ClimateMode mode, bool was_off) const;
-  uint8_t fan_code_for_mode_(climate::ClimateFanMode fan_mode) const;
-  BitField signature_field_() const {
-    return BitField{(uint8_t) (this->frame_bits_ - SIGNATURE_WIDTH), SIGNATURE_WIDTH};
-  }
-  /// True for modes where the remote transmits the setpoint.
-  bool mode_carries_setpoint_(climate::ClimateMode mode) const;
+  uint8_t mode_byte_() const;
+  uint8_t fan_byte_() const;
 
-  uint32_t header_high_{3200};
-  uint32_t header_low_{9900};
-  uint32_t bit_high_{500};
-  uint32_t bit_one_low_{1600};
-  uint32_t bit_zero_low_{550};
-  uint32_t chunk_gap_low_{8000};
+  uint32_t header_high_{3150};
+  uint32_t header_low_{1590};
+  uint32_t bit_high_{550};
+  uint32_t bit_one_low_{1070};
+  uint32_t bit_zero_low_{290};
   uint32_t carrier_frequency_{38000};
-  uint8_t frame_bits_{28};
-  uint8_t chunk_bits_{0};
-  ChecksumType checksum_type_{CHECKSUM_NIBBLE_SUM};
-  bool supports_swing_{false};
+  bool supports_swing_{true};
 
-  /// The mode the unit was in before the pending change, so we can pick between
-  /// the "switch on" and "change mode" commands.
-  climate::ClimateMode mode_before_{climate::CLIMATE_MODE_OFF};
-  /// Swing is a toggle on the remote, so it needs its own one-shot command
-  /// rather than being folded into the state frame.
-  bool send_swing_command_{false};
+  /// Hours remaining on the delay timer, 0 when disarmed. Part of every state
+  /// frame, so it lives here rather than in whatever entity exposes it.
+  uint8_t timer_hours_{TIMER_OFF};
+
+  /// An off frame keeps the mode byte of the state the unit was in, so powering
+  /// off does not tell us to forget the mode. Tracked to reproduce that.
+  climate::ClimateMode last_active_mode_{climate::CLIMATE_MODE_COOL};
 };
 
-template<typename... Ts>
-class SendFrameAction : public Action<Ts...>, public Parented<LgPortableAcClimate> {
+template<typename... Ts> class SendRawFrameAction : public Action<Ts...>, public Parented<LgPortableAcClimate> {
  public:
-  TEMPLATABLE_VALUE(uint64_t, frame)
+  TEMPLATABLE_VALUE(std::vector<uint8_t>, frame)
   TEMPLATABLE_VALUE(bool, recalculate_checksum)
 
   void play(const Ts &...x) override {
-    this->parent_->send_frame(this->frame_.value(x...), this->recalculate_checksum_.value(x...));
+    this->parent_->send_raw_frame(this->frame_.value(x...), this->recalculate_checksum_.value(x...));
   }
+};
+
+template<typename... Ts> class SetTimerAction : public Action<Ts...>, public Parented<LgPortableAcClimate> {
+ public:
+  TEMPLATABLE_VALUE(uint8_t, hours)
+
+  void play(const Ts &...x) override { this->parent_->set_timer_hours(this->hours_.value(x...)); }
+};
+
+template<typename... Ts> class LightToggleAction : public Action<Ts...>, public Parented<LgPortableAcClimate> {
+ public:
+  void play(const Ts &...x) override { this->parent_->send_light_toggle(); }
 };
 
 }  // namespace lg_portable_ac

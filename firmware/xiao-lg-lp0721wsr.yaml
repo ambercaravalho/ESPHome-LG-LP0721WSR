@@ -9,10 +9,9 @@
 #      in the room, or delete the `sensor:` block below. The AC does not report
 #      its own temperature, so this is the only way the climate card can show a
 #      current temperature.
-#   3. Work through captures/README.md and confirm the protocol settings under
-#      `climate:` match what tools/decode.py found. The defaults are the
-#      documented LG frame layout, not a verified LP0721WSR capture. See
-#      PROTOCOL.md.
+#   3. Nothing. The protocol is measured from this unit's own remote and the
+#      component defaults to it, so the `climate:` block below needs no tuning.
+#      PROTOCOL.md records the evidence if you want to check it.
 
 substitutions:
   # Must match the name the device already answers to, or Home Assistant treats
@@ -62,19 +61,17 @@ climate:
     receiver_id: ir_rx
     sensor: room_temperature
 
-    # LP0721WSR is cooling only. Set true on heat-pump models (LP0721SHR etc).
-    supports_heat: false
-    # Set true only if your unit actually has motorised louvres.
-    supports_swing: false
+    # Set false on units with a fixed vane, purely to hide the control.
+    supports_swing: true
 
-    # Frame layout and timings. Adjust from tools/decode.py output.
-    frame_bits: 28
-    checksum: nibble_sum
-    header_high: 3200us
-    header_low: 9900us
-    bit_high: 500us
-    bit_one_low: 1600us
-    bit_zero_low: 550us
+    # The timings are measured and are already the component's defaults, so this
+    # block is here to be explicit rather than because it is required. Only touch
+    # it if your own captures disagree; see PROTOCOL.md.
+    header_high: 3150us
+    header_low: 1590us
+    bit_high: 550us
+    bit_one_low: 1070us
+    bit_zero_low: 290us
 
 binary_sensor:
   # Tap the top of the IR Mate to toggle the AC without a phone.
