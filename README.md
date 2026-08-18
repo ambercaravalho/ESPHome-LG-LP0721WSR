@@ -1,177 +1,169 @@
-# ESPHome-LG-LP0721WSR
+# ESPHome LG LP0721WSR
 
-Home Assistant (ESPHome) infrared control for the LG LP0721WSR portable air
-conditioner, using a Seeed Studio XIAO Smart IR Mate as the blaster.
+Control an **LG LP0721WSR portable air conditioner** from Home Assistant over
+infrared, using a [Seeed Studio XIAO Smart IR Mate](https://wiki.seeedstudio.com/xiao_smart_ir_mate/)
+as the blaster. You get a real `climate` entity, plus entities for the remote
+buttons a climate card has no room for.
 
-Home Assistant's built-in LG climate integration and ESPHome's `climate_ir_lg`
-both target LG's split-system remotes. This gives you a real `climate` entity
-for the LP-series portables instead, plus entities for the remote buttons that a
-climate entity has no room for.
+Home Assistant's built-in LG integration and ESPHome's `climate_ir_lg` both target
+LG's *split-system* remotes, and this unit speaks something completely different —
+so neither one works, and no amount of retuning fixes it. This implements the
+LP-series protocol instead, measured from the unit's own remote.
+
+**Nothing needs reverse-engineering to use this.** The protocol is already decoded
+and built in. Fill in a config, flash, done. The evidence lives in
+[`research/`](research/) if you want it.
+
+- [What you get](#what-you-get)
+- [What you need](#what-you-need)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [Actions](#actions)
+- [Troubleshooting](#troubleshooting)
+- [How this was built](#how-this-was-built)
 
 ## What you get
 
 | Entity | Type | Covers |
 | --- | --- | --- |
-| Portable AC | `climate` | Power, Cool / Dry / Fan modes, setpoint 16-30 °C, Low / High fan, swing |
-| Display Brightness | `button` | Light button: On → Dim → Off |
-| Delay Timer | `number` | Timer, 0-24 h, where 0 disarms |
-| Status LED, Vibration, Capture Label | misc | Feedback and capture helpers |
+| Portable AC | `climate` | Power, Cool / Dry / Fan, setpoint 16–30 °C, Low / High fan, swing |
+| Display Brightness | `button` | The remote's Light button: On → Dim → Off |
+| Delay Timer | `number` | The timer, 0–24 h, where 0 disarms |
+| Status LED, Restart, Factory Reset | misc | Device housekeeping |
 
-Because the receiver is wired into the climate component, picking up the physical
-remote updates Home Assistant too, instead of leaving the entity showing a stale
-state. Swing has its own control on the climate entity rather than a separate
-button, because the protocol reports it as a state that can be read back.
+Three things work better here than on the remote:
 
-The Delay Timer is absolute: setting 12 hours is one transmission, where the remote
-needs twelve presses and drops out of timer-setting mode if you pause. Both are
-easier from Home Assistant than from the remote.
+**The entity follows the physical remote.** The IR receiver is wired into the
+climate component, so if someone picks up the remote, Home Assistant updates
+instead of sitting there showing a stale state.
 
-If Home Assistant is set to Fahrenheit, setpoints are sent in Fahrenheit, which the
-protocol carries separately and the unit acts on. That is a finer step than Celsius —
-about 0.56 °C — so asking for 78 °F gets you 78 and not the 79 you would land on by
-rounding through 26 °C. Nothing needs configuring for this; it follows your Home
-Assistant units, and picking up the remote and pressing its own unit button switches
-it back.
+**The timer is absolute.** Setting 12 hours is one transmission. The remote needs
+twelve presses and drops out of timer-setting mode if you pause.
 
-## Status
+**Fahrenheit is exact.** If Home Assistant is set to °F, setpoints are sent in
+Fahrenheit, which this protocol carries separately from Celsius and the unit acts
+on. That is a finer step than 1 °C, so asking for 78 °F gets you 78 rather than the
+79 you would land on by rounding through 26 °C. Nothing to configure — it follows
+your Home Assistant units, and pressing the unit button on the physical remote
+switches it back.
 
-**The protocol is measured, not inherited.** Every field is decoded from 90
-captures of this unit's own remote, committed to
-[`captures/`](captures/) so the claims are reproducible.
-[`tools/verify_protocol.py`](tools/verify_protocol.py) re-checks
-[PROTOCOL.md](PROTOCOL.md) against them, including a round-trip test that rebuilds
-each frame from only the fields the component models — so a field we had missed
-would fail the build rather than quietly produce wrong transmissions.
+Swing is a mode on the climate entity rather than a separate button, because the
+protocol reports it as a readable state.
 
-What remains untested is listed at the end of PROTOCOL.md, and all of it concerns
-frames the remote physically cannot produce, such as fixed vane positions and
-half-hour timer steps.
+### Supported units
 
-### Why the stock component cannot work
+Verified on the **LP0721WSR**. Other LP-series portables very likely use the same
+frame, since it is the remote family that differs rather than the unit, but nobody
+has captured one — if you have another model, [`research/`](research/) has the
+procedure and it is about 30 minutes of work.
 
-Worth stating plainly, because "just fix the header timings" is the usual advice
-for an LG remote that does not respond, and here it cannot help. `climate_ir_lg`
-implements a 28-bit frame with an 8000/4000 µs header, and tuning it to the
-3200/9900 µs some LG remotes use is the standard next step.
+Heating is deliberately not supported: this unit is cooling only, and the mode byte
+the heat-pump variants use has never been captured, so offering it would mean
+transmitting a guess. Setting `supports_heat: true` raises a config error rather
+than silently doing nothing.
 
-This remote is neither. It sends **112 bits** behind a **3150/1590 µs** header:
-four times the frame length, with a header space off by a factor of six. A receiver
-looking for the LG protocol does not misdecode these frames, it discards them —
-which is indistinguishable from "unsupported" and is why no amount of configuration
-fixes it.
+## What you need
 
-## Hardware
+- An LG LP0721WSR (or an LP-series portable, with the caveat above)
+- A Seeed Studio XIAO Smart IR Mate — an ESP32-C3 with three IR emitters and a receiver
+- Home Assistant with the ESPHome integration
+- Line of sight from the blaster to the AC's front panel, within about 6 m
 
-Seeed Studio XIAO Smart IR Mate (XIAO ESP32-C3):
+The pinout is already configured; it is here for reference only.
 
 | Function | Pin |
 | --- | --- |
-| IR emitters (3x) | `GPIO3` |
+| IR emitters (3×) | `GPIO3` |
 | IR receiver | `GPIO4`, inverted |
 | WS2812 status LED | `GPIO7` |
 | Vibration motor | `GPIO6` |
 | Touch pad | `GPIO5` |
 | Reset button | `GPIO9` |
 
-## Setup
+## Quick start
 
-### 1. Secrets
+### 1. Get the code
 
-The device is presumably already adopted into Home Assistant, so reuse its
-existing credentials or the OTA push will be rejected and you will have to
-reflash over USB.
+```bash
+git clone https://github.com/ambercaravalho/ESPHome-LG-LP0721WSR.git
+cd ESPHome-LG-LP0721WSR
+```
+
+You will also want the ESPHome CLI, if you do not have it:
+
+```bash
+python3 -m venv .venv-esphome && .venv-esphome/bin/pip install esphome
+```
+
+### 2. Fill in your secrets
 
 ```bash
 cp firmware/secrets.yaml.example firmware/secrets.yaml
 ```
 
-Fill in your Wi-Fi details, then copy `api.encryption.key` and `ota.password`
-out of the config the device is running now (ESPHome dashboard → your device →
-Edit) into `secrets.yaml`. `firmware/secrets.yaml` is gitignored.
+The file explains each value. Two are worth knowing about in advance:
 
-### 2. Match your device's name and address
-
-Both firmware configs set `name_add_mac_suffix: true`, so the device answers to
-`${name}-<last three MAC bytes>` rather than to `${name}`. Two substitutions at
-the top of `firmware/xiao-ir-capture.yaml` and `firmware/xiao-lg-lp0721wsr.yaml`
-have to agree with reality:
-
-- `name` must be byte-for-byte the name the device already uses, or Home
-  Assistant will treat the result as a brand-new device and orphan the existing
-  entities. Seeed's factory firmware uses `xiao-ir-mate`.
-- `device_address` is how the `esphome` CLI finds the device for OTA. The CLI
-  cannot derive the MAC suffix by itself, so without this it tries the
-  suffix-less `${name}.local` and fails to resolve.
-
-To read both off the network, browse for the ESPHome mDNS service:
+**`device_address`** is how the CLI finds the device for OTA. The configs set
+`name_add_mac_suffix: true`, so the device answers to `xiao-ir-mate-<last three MAC
+bytes>.local` rather than to `xiao-ir-mate.local`, and the CLI cannot work that
+suffix out by itself. Read it off your network with:
 
 ```bash
-dns-sd -B _esphomelib._tcp
+dns-sd -B _esphomelib._tcp        # macOS
+avahi-browse -rt _esphomelib._tcp # Linux
 ```
 
-The advertised instance name is the full hostname. Strip the trailing
-`-<six hex digits>` to get `name`, and append `.local` to get `device_address`.
-An IP address works for `device_address` too, at the cost of breaking whenever
-DHCP reassigns it.
+**`api_encryption_key` and `ota_password`** must match what the device is running
+*now* if it is already adopted into Home Assistant, or the OTA push is rejected and
+you will have to reflash over USB. Find them in the ESPHome dashboard: open the
+device, click Edit. If the device is new, generate fresh values instead
+(`openssl rand -base64 32` for the key).
 
-### 3. Confirm the toolchain
+`firmware/secrets.yaml` is gitignored.
 
-No dependencies beyond the Python standard library. A synthetic session is
-checked in so you can prove the analysis pipeline works before touching
-hardware:
+### 3. Check the device name
 
-```bash
-python3 tools/decode.py tools/fixtures/example-session.txt --layout
-python3 -m unittest discover -s tools -p 'test_*.py'
-```
+In `firmware/xiao-lg-lp0721wsr.yaml`, the `name` substitution must be
+**byte-for-byte** what the device already calls itself, or Home Assistant will
+adopt the result as a brand-new device and orphan your existing entities. Seeed's
+factory firmware uses `xiao-ir-mate`, which is the default here. New devices can
+use anything.
 
-### 4. Capture your remote
+While you are in there, point `room_temperature_entity` at a temperature sensor you
+already have in that room, or delete the `sensor:` block. The AC does not report its
+own temperature, so this is the only way the climate card can show a current
+reading.
 
-```bash
-esphome run firmware/xiao-ir-capture.yaml
-```
-
-Then follow [captures/README.md](captures/README.md). It is a specific sequence
-of button presses, in a specific order, for a reason: the decoder locates a field
-by comparing two captures that differ in exactly one thing. Budget 30 minutes.
-
-Save the logs into `captures/` and analyse them:
-
-```bash
-python3 tools/decode.py captures/ --layout
-```
-
-### 5. Reconcile
-
-Only needed if your remote turns out to differ from the one this was measured
-from. Check your captures against the documented layout:
-
-```bash
-python3 tools/verify_protocol.py captures/
-```
-
-Silence means your remote matches and there is nothing to do. Otherwise:
-
-- **Timings differ** → change them in `firmware/xiao-lg-lp0721wsr.yaml`. They are
-  config options, so the component does not need recompiling.
-- **Field positions or values differ** → edit the `PROTOCOL TABLE` block in
-  [`components/lg_portable_ac/lg_portable_ac.h`](components/lg_portable_ac/lg_portable_ac.h),
-  which is a small set of named constants rather than a bit-field table.
-
-### 6. Flash the real firmware
-
-Set `room_temperature_entity` to a temperature sensor you already have in that
-room (the AC does not report its own), then:
+### 4. Flash it
 
 ```bash
 esphome run firmware/xiao-lg-lp0721wsr.yaml
 ```
 
-## Using it from the Home Assistant ESPHome dashboard
+The entities appear in Home Assistant automatically. Aim the blaster at the AC and
+try the climate card.
 
-The bundled configs reference the component by local path so they work from a
-clone. If you are pasting into the dashboard instead, swap the
-`external_components` block for:
+### 5. Confirm it is really working
+
+Worth five minutes, because "the entity changed" and "the AC changed" are not the
+same thing.
+
+1. **Does the unit respond?** Walk the card through off, on, each mode, both fan
+   speeds, and each end of the temperature range. Watch the AC, not Home Assistant.
+2. **Do the frames match the remote's?** The log prints `sending` and all fourteen
+   bytes on every transmission. Set the same state twice, once from Home Assistant
+   and once from the remote, and compare. They should be identical — and if not, the
+   byte that differs names the field that is wrong.
+3. **Does the remote update Home Assistant?** Change something with the physical
+   remote; the entity should follow within a second.
+
+Then set `ir_dump: "none"` and `log_level: "INFO"` to quiet the logs down.
+
+### Using the Home Assistant ESPHome dashboard instead
+
+The bundled configs reference the component by local path, so they work from a
+clone. If you would rather paste a config into the dashboard, point
+`external_components` at GitHub instead:
 
 ```yaml
 external_components:
@@ -179,7 +171,10 @@ external_components:
     components: [lg_portable_ac]
 ```
 
-## Component configuration
+You will need to inline the contents of `firmware/packages/` too, since the
+dashboard has no local files to `!include`.
+
+## Configuration
 
 ```yaml
 climate:
@@ -193,8 +188,8 @@ climate:
     # Set false on units with a fixed vane, purely to hide the control.
     supports_swing: true
 
-    # All measured, and all already the defaults. Listed for reference; you only
-    # need them if your own captures disagree.
+    # Measured, and already the defaults. Here for reference — you only need
+    # these if your own captures disagree.
     header_high: 3150us
     header_low: 1590us
     bit_high: 550us
@@ -203,17 +198,13 @@ climate:
     carrier_frequency: 38000Hz
 ```
 
-There is no `supports_heat`: the LP0721WSR is cooling only, and the mode byte
-heat-pump variants use has never been captured, so enabling it would transmit a
-guess. Setting it raises a config error rather than silently doing nothing.
-
-### Actions
+## Actions
 
 ```yaml
 # Cycle the display brightness, On -> Dim -> Off.
 - lg_portable_ac.light_toggle: ac
 
-# Arm the delay timer, or disarm it with 0. Absolute, not a counter.
+# Arm the delay timer, or disarm with 0. Absolute, not a counter.
 - lg_portable_ac.set_timer:
     id: ac
     hours: 8
@@ -221,8 +212,8 @@ guess. Setting it raises a config error rather than silently doing nothing.
 
 ### Sending arbitrary frames
 
-For frames the component does not model — a fixed vane position, a Fahrenheit
-setpoint — all fourteen bytes go out as given:
+For anything the component does not model — a fixed vane angle, say — all fourteen
+bytes go out as given:
 
 ```yaml
 button:
@@ -232,101 +223,94 @@ button:
       - lg_portable_ac.send_raw_frame:
           id: ac
           frame: [0x23, 0xCB, 0x26, 0x01, 0x00, 0x24, 0x03, 0x07, 0x1D, 0x00, 0x00, 0x00, 0x00, 0x00]
-          recalculate_checksum: true   # false to send a captured frame verbatim
+          recalculate_checksum: true   # false sends a captured frame verbatim
 ```
 
-A raw frame does not update the climate entity, so it will disagree with the unit
-until the next state change.
-
-## Verifying on hardware
-
-Once flashed, with `ir_dump: "raw"` still set:
-
-1. **Does it respond?** Walk the climate card through off, on, each mode, both
-   fan speeds, and the ends of the temperature range. Watch the unit, not just
-   Home Assistant.
-2. **Do our frames match the remote's?** The log prints `sending` followed by all
-   fourteen bytes for every transmission. Set the same state twice, once from Home
-   Assistant and once from the remote, and compare. They should be byte-identical,
-   and the byte that differs names the field that is wrong.
-3. **Does the remote update Home Assistant?** Change something with the physical
-   remote and confirm the entity follows within a second.
-4. **Watch for `checksum mismatch`** warnings. Those mean frames are being received
-   and bit-decoded but failing validation, which usually points at receiver
-   saturation rather than the checksum itself; see `captures/README.md`.
-5. **Check the timer both ways.** Set it from Home Assistant and confirm the unit's
-   display agrees, then set it from the remote and confirm the number entity
-   follows. It reads back from received frames, so this exercises both directions.
-
-Set `ir_dump: "none"` and `log_level: "INFO"` when you are happy.
+A raw frame does not update the climate entity, so the two will disagree until the
+next state change. [`research/PROTOCOL.md`](research/PROTOCOL.md) documents what
+each byte means.
 
 ## Troubleshooting
 
-**The AC ignores everything.** Confirm the emitters have line of sight to the
-sensor on the front panel, within about 6 m. If the log shows frames going out and
-they match what the remote sends byte for byte, the protocol is not the problem and
-it is a range or aiming issue.
+**The AC ignores everything.** Check line of sight to the sensor on the front
+panel, within about 6 m. If the log shows frames going out that match the remote's
+byte for byte, the protocol is fine and this is a range or aiming problem.
 
-**Frames arrive with a varying symbol count.** They are being split or
-truncated. Raise `idle` in `firmware/packages/xiao-hardware.yaml` (capped at
-65534 µs at `clock_resolution: "500000"`), and raise `rmt_symbols` from the
-ESP32-C3 default of 96 to 192 plus `buffer_size: 20000b` if it is truncation.
-Note that `memory_blocks` no longer exists in current ESPHome; `rmt_symbols` is
-its replacement.
+**`Error resolving IP address` when flashing.** `device_address` in
+`secrets.yaml` is wrong or missing. See [step 2](#2-fill-in-your-secrets).
+
+**OTA rejected.** `api_encryption_key` or `ota_password` does not match what the
+device is running. Copy them out of the existing dashboard config, or reflash over
+USB.
+
+**A second, duplicate device appears in Home Assistant.** The `name` substitution
+does not match what the device was previously called. Fix it, reflash, then delete
+the stale device from the ESPHome integration page.
+
+**Home Assistant and the AC disagree.** Expected on any IR setup after a power cut,
+since IR has no feedback channel. Wiring `receiver_id` in narrows it to cases where
+somebody used the control panel on the unit itself.
 
 **Nothing is received at all.** The raw dumper logs at `DEBUG`, so `INFO` hides
 every capture. Check `log_level`.
 
-**Home Assistant and the AC disagree.** Expected on any IR-only setup after a
-power cut, since there is no feedback channel. Wiring `receiver_id` in limits it
-to cases where nobody touched the control panel directly.
+**`checksum mismatch` warnings.** Frames are arriving and being bit-decoded but
+failing validation. This usually means receiver saturation rather than a checksum
+problem — see the troubleshooting section of
+[`research/capture-guide.md`](research/capture-guide.md).
 
-**OTA rejected after switching configs.** `api.encryption.key` or `ota.password`
-in `secrets.yaml` does not match what the device is running. Copy them from the
-existing dashboard config, or reflash over USB.
+## How this was built
 
-**`Error resolving IP address` on upload.** The CLI is looking for
-`${name}.local`, but `name_add_mac_suffix` means the device answers to
-`${name}-<mac suffix>`. Set the `device_address` substitution, per setup step 2.
+The protocol is **measured, not inherited**. Every field was decoded from 90
+captures of this unit's own remote, and those captures are committed so the claims
+are checkable rather than taken on trust.
 
-**A second, duplicate device appears in Home Assistant.** The `name`
-substitution does not match what the device was previously called. Fix `name`,
-reflash, then delete the stale device from the ESPHome integration page.
+If you want the details:
+
+- [`research/README.md`](research/README.md) — how the protocol was found, and how to repeat it on another remote
+- [`research/PROTOCOL.md`](research/PROTOCOL.md) — the frame format, field by field, with the evidence for each claim
+- [`research/capture-guide.md`](research/capture-guide.md) — the capture procedure
+- [`research/captures/`](research/captures/) — the raw logs
+- [`research/tools/`](research/tools/) — the analysis scripts
+
+The short version of why the stock component cannot work: `climate_ir_lg` expects a
+28-bit frame behind an 8000/4000 µs header. This remote sends **112 bits** behind a
+**3150/1590 µs** header. A decoder looking for the LG protocol does not misread
+these frames, it discards them — which looks exactly like "unsupported".
 
 ## Repository layout
 
 ```
-components/lg_portable_ac/    ESPHome external component (climate platform)
+components/lg_portable_ac/    The ESPHome external component
 firmware/
-  xiao-ir-capture.yaml        Phase 1: capture rig
-  xiao-lg-lp0721wsr.yaml      Final firmware
-  packages/
-    xiao-hardware.yaml        Board, radio, IR, LED, haptics (shared)
-    lg-extras.yaml            Light button and Delay Timer entities
-captures/                     Your logs, plus the capture procedure
-tools/
-  parse_raw.py                ESPHome log -> raw frames
-  decode.py                   Raw frames -> timings, fields, checksum, byte layout
-  verify_protocol.py          Asserts PROTOCOL.md against the captures
-  test_decode.py              Tests for the tooling
-  fixtures/                   Synthetic session for validating the toolchain
-PROTOCOL.md                   Frame format, and the evidence for each field
+  xiao-lg-lp0721wsr.yaml      The firmware you flash
+  xiao-ir-capture.yaml        Capture rig, only needed for research
+  packages/                   Shared hardware config and the extra entities
+  secrets.yaml.example        Template for your credentials
+research/                     How the protocol was reverse-engineered
 ```
 
 ## Development
 
 ```bash
-python3 -m unittest discover -s tools -p 'test_*.py'
-python3 tools/verify_protocol.py
+python3 -m unittest discover -s research/tools -p 'test_*.py'
+python3 research/tools/verify_protocol.py
 esphome config firmware/xiao-lg-lp0721wsr.yaml
 esphome compile firmware/xiao-lg-lp0721wsr.yaml
 ```
 
 `verify_protocol.py` is the one that matters when touching the protocol. Beyond
-checking each field, it rebuilds every captured frame from only the fields the
-component models and requires a byte-for-byte match, so a field nobody noticed
-fails the check rather than quietly producing transmissions that differ from the
-remote's.
+checking each documented field, it rebuilds every captured frame from only the
+fields the component models and requires a byte-for-byte match — so a field nobody
+noticed fails the check, rather than quietly producing transmissions that differ
+from the remote's.
+
+## Contributing
+
+Captures from other LG portables are the most useful thing anyone could add.
+[`research/capture-guide.md`](research/capture-guide.md) is the procedure; open an
+issue or a PR with the raw log and `verify_protocol.py` will say whether your unit
+matches this one.
 
 ## Licence
 

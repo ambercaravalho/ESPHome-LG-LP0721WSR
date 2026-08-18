@@ -1,8 +1,13 @@
-# Phase 1: IR capture rig for the XIAO Smart IR Mate.
+# IR capture rig for the XIAO Smart IR Mate.
 #
-# Flash this, open the ESPHome log stream, then work through the capture matrix
-# in captures/README.md. Every button press on the LG remote prints a
-# "Received Raw:" block that tools/decode.py can parse.
+# You do not need this to use the AC: the protocol is already measured and the
+# normal firmware is xiao-lg-lp0721wsr.yaml. This is for reverse-engineering, so
+# reach for it only if your remote turns out to behave differently or you are
+# adding a model.
+#
+# Flash it, open the ESPHome log stream, then work through the capture matrix in
+# research/capture-guide.md. Every button press on the LG remote prints a
+# "Received Raw:" block that research/tools/decode.py can parse.
 #
 # Keep `name` identical to your existing device so Home Assistant keeps the
 # same device and entity IDs instead of re-adopting it as something new. Copy
@@ -16,15 +21,15 @@ substitutions:
   # browsing for _esphomelib._tcp on your network and stripping the MAC suffix.
   name: "xiao-ir-mate"
   friendly_name: "XIAO Smart IR Mate"
-  # "${name}-" plus the last three bytes of the MAC, lowercase and unseparated.
-  # For AC:27:6E:1A:2B:3C that is 1a2b3c. An IP address works here too.
-  device_address: "xiao-ir-mate-1a2b3c.local"
+  # Lives in secrets.yaml because it is derived from your device's MAC, so there
+  # is no value here that would be right for anyone else.
+  device_address: !secret device_address
   # The raw dumper logs at DEBUG. INFO (Seeed's default) hides every capture.
   log_level: "DEBUG"
   # This has to be "raw", not "all". ESPHome marks the raw dumper as *secondary*,
   # meaning it only runs when no protocol-specific dumper claimed the frame, and
   # the Pronto dumper claims everything. So "all" silently produces no
-  # "Received Raw:" lines at all, which is exactly what tools/parse_raw.py needs.
+  # "Received Raw:" lines at all, which is exactly what parse_raw.py needs.
   ir_dump: "raw"
 
 packages:
@@ -32,7 +37,7 @@ packages:
 
 # Type the state you are about to capture here, press "Mark Capture", then
 # press the button on the LG remote. The mark is written to the log in the
-# exact "# state: ..." format that tools/parse_raw.py reads, so labels survive
+# exact "# state: ..." format that research/tools/parse_raw.py reads, so labels survive
 # a copy-paste of the log with no manual editing.
 text:
   - platform: template

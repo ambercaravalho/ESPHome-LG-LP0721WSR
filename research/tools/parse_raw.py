@@ -17,8 +17,8 @@ Also accepts hand-pasted files containing bare comma-separated numbers or JSON
 arrays, one capture per line, with ``#`` comment lines for the markers.
 
 Usage:
-    python3 tools/parse_raw.py captures/*.txt
-    python3 tools/parse_raw.py captures/*.txt --json > frames.json
+    python3 research/tools/parse_raw.py research/captures/*.txt
+    python3 research/tools/parse_raw.py research/captures/*.txt --json > frames.json
 """
 
 from __future__ import annotations

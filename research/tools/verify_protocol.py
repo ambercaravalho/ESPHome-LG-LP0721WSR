@@ -13,8 +13,8 @@ a power frame labelled as the wrong mode shows up here rather than quietly
 corrupting the attribution of some other field.
 
 Usage:
-    python3 tools/verify_protocol.py                    # captures/
-    python3 tools/verify_protocol.py captures/session-01.txt
+    python3 research/tools/verify_protocol.py           # research/captures/
+    python3 research/tools/verify_protocol.py research/captures/session-01.txt
 """
 
 from __future__ import annotations
@@ -237,7 +237,11 @@ def check(capture: Capture) -> List[str]:
 
 
 def main(argv: List[str]) -> int:
-    patterns = argv[1:] or ["captures"]
+    # Default to the captures committed alongside this script, resolved from the
+    # script's own location rather than the working directory, so the no-argument
+    # form works as a regression check from anywhere in the tree.
+    default = Path(__file__).resolve().parent.parent / "captures"
+    patterns = argv[1:] or [str(default)]
     paths = expand_paths(patterns)
     if not paths:
         print("no capture files found", file=sys.stderr)

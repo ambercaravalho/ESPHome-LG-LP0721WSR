@@ -13,10 +13,10 @@ namespace lg_portable_ac {
 // ===========================================================================
 // PROTOCOL TABLE
 // ===========================================================================
-// Measured from 86 captures of the original LP0721WSR remote. Every value here
-// is observed, not inherited from another LG model, and PROTOCOL.md records the
-// evidence for each one. tools/verify_protocol.py re-checks these against the
-// committed captures.
+// Measured from 90 captures of the original LP0721WSR remote. Every value here
+// is observed, not inherited from another LG model, and research/PROTOCOL.md
+// records the evidence for each one. research/tools/verify_protocol.py re-checks
+// these against the committed captures.
 //
 // A frame is 14 bytes sent least significant bit first:
 //

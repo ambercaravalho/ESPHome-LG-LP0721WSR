@@ -1,7 +1,7 @@
 # Synthetic capture session. Not from real hardware: it encodes the
 # documented LG 28-bit split-system protocol so you can confirm the
 # toolchain works end to end before you capture anything.
-#   python3 tools/decode.py tools/fixtures/example-session.txt --layout
+#   python3 research/tools/decode.py research/tools/fixtures/example-session.txt --layout
 [12:00:00][I][main:123]: # state: mode=cool temp=24 fan=high
 [12:00:00][D][remote.raw:028]: Received Raw: 3237, -9859, 498, -1562, 542, -510, 520, -521, 525, -530, 544, -1573, 536, -587, 472, -525
 [12:00:00][D][remote.raw:041]:   473, -571, 527, -562, 514, -514, 537, -541, 516, -567, 467, -1567, 531, -542, 463, -506

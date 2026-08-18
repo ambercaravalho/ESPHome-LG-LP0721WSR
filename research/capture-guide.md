@@ -3,14 +3,22 @@
 Everything in this project depends on getting clean raw IR captures out of the
 LG remote. This document is the procedure. Budget about 30 minutes.
 
+You only need this if you are capturing a remote yourself — to *use* the project,
+see the [main README](../README.md). Start at the
+[research overview](README.md) for why any of this was necessary.
+
 ## Before you start
 
 0. Confirm the toolchain works before you touch hardware. There is a synthetic
-   session checked in, so this should print a full analysis:
+   session checked in, so this should print an analysis rather than an error:
 
    ```bash
-   python3 tools/decode.py tools/fixtures/example-session.txt --layout
+   python3 research/tools/decode.py research/tools/fixtures/example-session.txt --layout
    ```
+
+   It encodes LG's 28-bit split-system frame, so `frames are not byte-aligned` is
+   the expected result — 28 bits is not a whole number of bytes. The fixture is
+   there to exercise the pipeline, not to describe this unit.
 
 1. Flash [`../firmware/xiao-ir-capture.yaml`](../firmware/xiao-ir-capture.yaml).
 2. **Switch the remote to Celsius.** Hold the `Swing` button on the remote for
@@ -48,7 +56,7 @@ line like
 # state: mode=cool temp=24 fan=high
 ```
 
-into the log, which [`../tools/parse_raw.py`](../tools/parse_raw.py) reads
+into the log, which [`tools/parse_raw.py`](tools/parse_raw.py) reads
 automatically. Recognised keys:
 
 | Key      | Values                                   | Notes                                        |
@@ -208,7 +216,7 @@ at zero rather than incrementing.
 
 **Already captured.** Byte 9 holds the timer in ten-minute units, `0x06` per hour
 up to `0x90` at 24 h, with byte 5 bit `0x08` set while armed. See
-[`PROTOCOL.md`](../PROTOCOL.md).
+[`PROTOCOL.md`](PROTOCOL.md).
 
 ### G. Light
 
@@ -228,7 +236,7 @@ frames setting byte 5 bit `0x40`; the unit cycles the brightness internally and 
 frame carries no light value. The power bit stays set, so the
 [esphome#2101](https://github.com/esphome/esphome/issues/2101) confusion between
 the brightness frame and a power-off frame does not apply here. See
-[`PROTOCOL.md`](../PROTOCOL.md).
+[`PROTOCOL.md`](PROTOCOL.md).
 
 ### H. Swing
 
@@ -244,7 +252,7 @@ component should not offer a swing control.
 **Already captured, and unlike Light it is a real state.** Byte 8 holds it in mask
 `0x38`, `0` for off and `7` for on, alongside the fan speed in `0x07`. Because the
 frame reports it, the climate entity can expose swing as a mode and read it back.
-See [`PROTOCOL.md`](../PROTOCOL.md).
+See [`PROTOCOL.md`](PROTOCOL.md).
 
 ## Saving the logs
 
@@ -252,18 +260,18 @@ Copy the log text and save it into this directory. One file for everything is
 fine — the `# state:` markers do the splitting:
 
 ```
-captures/session-01.txt
+research/captures/session-01.txt
 ```
 
-If you prefer to split by area, use `captures/<section>.txt`, e.g.
-`captures/d-temperature-sweep.txt`. The tools glob the whole directory either
+If you prefer to split by area, use `research/captures/<section>.txt`, e.g.
+`research/captures/d-temperature-sweep.txt`. The tools glob the whole directory either
 way. Paste the log verbatim; do not reformat, rewrap, or strip the `[D][...]`
 prefixes, the parser wants them.
 
 Then:
 
 ```bash
-python3 tools/decode.py captures/*.txt
+python3 research/tools/decode.py research/captures/*.txt
 ```
 
 ## Troubleshooting

@@ -11,15 +11,16 @@
 #      current temperature.
 #   3. Nothing. The protocol is measured from this unit's own remote and the
 #      component defaults to it, so the `climate:` block below needs no tuning.
-#      PROTOCOL.md records the evidence if you want to check it.
+#      research/PROTOCOL.md records the evidence if you want to check it.
 
 substitutions:
   # Must match the name the device already answers to, or Home Assistant treats
   # this as a brand-new device and orphans the existing entities.
   name: "xiao-ir-mate"
   friendly_name: "Portable AC"
-  # "${name}-" plus the last three bytes of the MAC, lowercase and unseparated.
-  device_address: "xiao-ir-mate-1a2b3c.local"
+  # Lives in secrets.yaml because it is derived from your device's MAC, so there
+  # is no value here that would be right for anyone else.
+  device_address: !secret device_address
   log_level: "DEBUG"
   # Keep the raw dumper on: it costs nothing and it is how you compare what we
   # transmit against what the real remote sends. Set to "none" once happy.
@@ -66,7 +67,7 @@ climate:
 
     # The timings are measured and are already the component's defaults, so this
     # block is here to be explicit rather than because it is required. Only touch
-    # it if your own captures disagree; see PROTOCOL.md.
+    # it if your own captures disagree; see research/PROTOCOL.md.
     header_high: 3150us
     header_low: 1590us
     bit_high: 550us

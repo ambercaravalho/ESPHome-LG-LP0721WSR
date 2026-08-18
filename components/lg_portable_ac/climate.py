@@ -51,7 +51,7 @@ def validate_config(config):
             "heat is not supported: the LP0721WSR is cooling only, and the mode "
             "byte used by heat-pump variants such as the LP0721SHR has not been "
             "captured, so enabling this would transmit a guess. Capture a heat "
-            "frame and add it to the component first; see PROTOCOL.md",
+            "frame and add it to the component first; see research/PROTOCOL.md",
             path=[CONF_SUPPORTS_HEAT],
         )
     return config
@@ -64,10 +64,10 @@ CONFIG_SCHEMA = cv.All(
             # Harmless to leave on: the bits are simply ignored by such a unit.
             cv.Optional(CONF_SUPPORTS_SWING, default=True): cv.boolean,
             cv.Optional(CONF_SUPPORTS_HEAT, default=False): cv.boolean,
-            # Measured from the LP0721WSR remote across 86 captures. These are
+            # Measured from the LP0721WSR remote across 90 captures. These are
             # not the LG defaults and not inherited from another model: the
             # header space in particular is ~1590us, where other LG remotes use
-            # ~4000us or ~9900us. See PROTOCOL.md.
+            # ~4000us or ~9900us. See research/PROTOCOL.md.
             cv.Optional(
                 CONF_HEADER_HIGH, default="3150us"
             ): cv.positive_time_period_microseconds,

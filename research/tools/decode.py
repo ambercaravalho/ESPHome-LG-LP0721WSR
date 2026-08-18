@@ -16,9 +16,9 @@ Given a directory of logs produced by ``firmware/xiao-ir-capture.yaml``, this:
 6. Summarises the frame byte by byte, naming which label moves each byte.
 
 Usage:
-    python3 tools/decode.py captures/
-    python3 tools/decode.py captures/*.txt --layout
-    python3 tools/decode.py captures/ --bit-order lsb -v
+    python3 research/tools/decode.py research/captures/
+    python3 research/tools/decode.py research/captures/*.txt --layout
+    python3 research/tools/decode.py research/captures/ --bit-order lsb -v
 """
 
 from __future__ import annotations
@@ -611,7 +611,7 @@ def report(frames: Sequence[Frame], timing: Timing, bit_orders: Sequence[str], v
     attribution = attribute_fields(frames)
     if not attribution.by_key:
         print("  Nothing attributable. This needs captures that differ in exactly one")
-        print("  labelled key; see captures/README.md for the matrix that guarantees it.")
+        print("  labelled key; see research/capture-guide.md for the matrix that guarantees it.")
     if checksum_bits:
         low, high = min(checksum_bits), max(checksum_bits)
         widths = sorted({match.checksum_nibbles * 4 for match in all_matches})

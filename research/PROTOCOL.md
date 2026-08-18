@@ -3,10 +3,10 @@
 ## Status
 
 Measured from 90 captures of the original remote, recorded with
-[`firmware/xiao-ir-capture.yaml`](firmware/xiao-ir-capture.yaml) and analysed with
-[`tools/decode.py`](tools/decode.py). The raw session is committed as
+[`firmware/xiao-ir-capture.yaml`](../firmware/xiao-ir-capture.yaml) and analysed
+with [`tools/decode.py`](tools/decode.py). The raw session is committed as
 [`captures/session-01.txt`](captures/session-01.txt) so every claim here is
-reproducible.
+reproducible — see [the research overview](README.md) for how to re-run it.
 
 | Item | Status |
 | --- | --- |
@@ -57,7 +57,7 @@ inherited rather than observed.
 A capture that reports anything other than 228 symbols is damaged. The usual
 cause is holding the remote too close, which saturates the receiver and merges
 adjacent bits; see the troubleshooting section of
-[`captures/README.md`](captures/README.md).
+[the capture guide](capture-guide.md).
 
 ## Frame layout
 
