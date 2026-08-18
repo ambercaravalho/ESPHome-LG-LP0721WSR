@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tools:
+    name: Analysis tools (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The tools claim to run on 3.9+ with no third-party dependencies. Testing
+        # both ends of that range is what keeps the claim true.
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Unit tests
+        run: python -m unittest discover -s research/tools -p 'test_*.py' -v
+
+      - name: Protocol matches the committed captures
+        # Re-checks every claim in research/PROTOCOL.md against all 90 captures and
+        # rebuilds each frame from only the fields the component models, so a field
+        # nobody noticed fails here rather than in a wrong transmission.
+        run: python research/tools/verify_protocol.py
+
+      - name: Toolchain smoke test
+        run: python research/tools/decode.py research/tools/fixtures/example-session.txt --layout
+
+  config:
+    name: ESPHome config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install ESPHome
+        run: pip install esphome
+
+      - name: Generate throwaway secrets
+        # secrets.yaml is gitignored, so CI has to supply one. These values exist
+        # only inside this ephemeral runner and never touch a real device: the key
+        # is random per run, and the rest are obvious placeholders. Real
+        # credentials must never be committed or put in a workflow.
+        run: |
+          cat > firmware/secrets.yaml <<EOF
+          wifi_ssid: "ci-network"
+          wifi_password: "ci-wifi-password"
+          device_address: "xiao-ir-mate-1a2b3c.local"
+          ap_password: "ci-fallback-ap"
+          api_encryption_key: "$(openssl rand -base64 32)"
+          ota_password: "ci-ota-password"
+          EOF
+
+      - name: Validate both firmware configs
+        run: |
+          esphome config firmware/xiao-lg-lp0721wsr.yaml
+          esphome config firmware/xiao-ir-capture.yaml
+
+  links:
+    name: Documentation links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Every relative link resolves
+        # The docs cross-reference each other and the code by relative path, which
+        # a file move breaks silently. This is cheap insurance against that.
+        run: |
+          python - <<'PY'
+          import re, sys
+          from pathlib import Path
+
+          dead, checked = [], 0
+          for doc in Path(".").rglob("*.md"):
+              if any(part in {".git", ".esphome"} for part in doc.parts):
+                  continue
+              for target in re.findall(r"\[[^\]]+\]\(([^)#][^)]*)\)", doc.read_text()):
+                  if target.startswith(("http://", "https://", "mailto:")):
+                      continue
+                  checked += 1
+                  if not (doc.parent / target.split("#")[0]).exists():
+                      dead.append(f"{doc}: {target}")
+
+          print(f"checked {checked} relative link(s)")
+          for entry in dead:
+              print(f"  dead: {entry}")
+          sys.exit(1 if dead else 0)
+          PY

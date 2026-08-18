@@ -1,5 +1,8 @@
 # ESPHome LG LP0721WSR
 
+[![CI](https://github.com/ambercaravalho/ESPHome-LG-LP0721WSR/actions/workflows/ci.yml/badge.svg)](https://github.com/ambercaravalho/ESPHome-LG-LP0721WSR/actions/workflows/ci.yml)
+[![Licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-blue.svg)](LICENSE)
+
 Control an **LG LP0721WSR portable air conditioner** from Home Assistant over
 infrared, using a [Seeed Studio XIAO Smart IR Mate](https://wiki.seeedstudio.com/xiao_smart_ir_mate/)
 as the blaster. You get a real `climate` entity, plus entities for the remote
@@ -304,6 +307,9 @@ checking each documented field, it rebuilds every captured frame from only the
 fields the component models and requires a byte-for-byte match — so a field nobody
 noticed fails the check, rather than quietly producing transmissions that differ
 from the remote's.
+
+All of the above runs in CI on every push, along with a check that the relative
+links in these documents still resolve.
 
 ## Contributing
 
