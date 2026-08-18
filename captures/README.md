@@ -9,7 +9,7 @@ LG remote. This document is the procedure. Budget about 30 minutes.
    session checked in, so this should print a full analysis:
 
    ```bash
-   python3 tools/decode.py tools/fixtures/example-session.txt --emit-cpp
+   python3 tools/decode.py tools/fixtures/example-session.txt --layout
    ```
 
 1. Flash [`../firmware/xiao-ir-capture.yaml`](../firmware/xiao-ir-capture.yaml).

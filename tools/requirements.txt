@@ -1,5 +1,5 @@
 # No third-party dependencies. Everything here runs on the Python 3.9+ standard
 # library so it works in any checkout without a virtualenv.
 #
-#   python3 tools/decode.py captures/ --emit-cpp
+#   python3 tools/decode.py captures/ --layout
 #   python3 -m unittest discover -s tools -p 'test_*.py'
