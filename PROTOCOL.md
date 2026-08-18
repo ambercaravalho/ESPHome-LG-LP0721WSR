@@ -18,8 +18,8 @@ reproducible.
 | Power bit | **Measured** |
 | Mode field, Cool / Dry / Fan | **Measured** |
 | Temperature field, 16–30 °C | **Measured** across the entire range |
-| Checksum | **Measured** and consistent across all 40 frames, though not yet unique |
-| Fan field | Located, values **not** yet resolved |
+| Checksum | **Measured** and consistent across every frame, though not yet unique |
+| Fan field | **Measured** — two speeds, which is all this unit has |
 | Timer, Light, Swing | Not yet captured |
 
 ## Why the stock component cannot work
@@ -74,7 +74,7 @@ is only useful for spotting the bit order in the first place.
 | 5 | Power | `0x24` on, `0x20` off — only bit `0x04` moves |
 | 6 | Mode | Cool `0x03`, Dry `0x02`, Fan `0x07` |
 | 7 | Temperature | `31 − °C`, so 16 °C is `0x0F` and 30 °C is `0x01` |
-| 8 | Fan | `0x05` at High in Cool; `0x02` in Dry and Fan mode |
+| 8 | Fan | Low `0x02`, High `0x05` |
 | 9–12 | Constant | Always zero in everything captured so far |
 | 13 | Checksum | See below |
 
@@ -117,15 +117,13 @@ separate it from `nibble_sum`.
 
 ## What is left
 
-1. **Fan values.** Byte 8 is `0x05` at High in Cool and `0x02` in both Dry and Fan
-   mode. Whether `0x02` is Low, Auto, or mode-forced needs section E.
-2. **Timer.** Unknown, and probably where bytes 9–12 stop being zero. Also the
+1. **Timer.** Unknown, and probably where bytes 9–12 stop being zero. Also the
    likeliest way to pin the checksum down uniquely.
-3. **Light and Swing.** Unknown. If each press produces an identical frame they
+2. **Light and Swing.** Unknown. If each press produces an identical frame they
    are pure toggles and one captured frame each is enough.
-4. **Heat.** Not applicable to the LP0721WSR, which is cooling only. The mode
+3. **Heat.** Not applicable to the LP0721WSR, which is cooling only. The mode
    nibble has room for it on `SHR` variants.
-5. **Bytes 9–12.** Constant zero so far. Timer or swing state is the obvious
+4. **Bytes 9–12.** Constant zero so far. Timer or swing state is the obvious
    candidate for what lives there.
 
 ## Escape hatch
