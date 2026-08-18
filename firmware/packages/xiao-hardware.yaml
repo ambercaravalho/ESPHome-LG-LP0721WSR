@@ -96,7 +96,9 @@ remote_receiver:
 light:
   - platform: esp32_rmt_led_strip
     id: status_led
-    name: "Status LED"
+    # No entity in Home Assistant: the LED only exists to flash an acknowledgement
+    # from the scripts below, and publishing it just fills the log with state changes.
+    internal: true
     pin: GPIO7
     num_leds: 1
     chipset: WS2812
