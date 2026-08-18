@@ -194,9 +194,21 @@ From a powered-on state (Cool / 24 / High):
 ```
 
 1 and 2 show where the counter lives, 12 and 24 show its width, and `off`
-shows how cancellation is signalled. Reaching 12 and 24 means a lot of button
-presses — mark the label only for the presses listed above and ignore the
-intermediate ones, the decoder skips unlabelled frames.
+shows how cancellation is signalled.
+
+Reaching 12 and 24 means a lot of presses, and **every one of them is recorded
+whether you label it or not**. Unlabelled frames do not get skipped; they inherit
+the last label you marked, so labelling only the milestones above produces a run
+of frames all claiming `timer=2`. Mark each press as you go, or accept that the
+run will need relabelling from the frame contents afterwards.
+
+Note the timer also moves in whole hours only if you keep pressing briskly — pause
+too long and the remote leaves timer-setting mode, so the next press re-enters it
+at zero rather than incrementing.
+
+**Already captured.** Byte 9 holds the timer in ten-minute units, `0x06` per hour
+up to `0x90` at 24 h, with byte 5 bit `0x08` set while armed. See
+[`PROTOCOL.md`](../PROTOCOL.md).
 
 ### G. Light
 
@@ -211,14 +223,28 @@ Three presses to walk the full On → Dim → Off cycle:
 If all three frames are identical, Light is a pure toggle and we only need one
 raw code for it.
 
+**Already captured, and it is a pure toggle.** Seven presses produced identical
+frames setting byte 5 bit `0x40`; the unit cycles the brightness internally and the
+frame carries no light value. The power bit stays set, so the
+[esphome#2101](https://github.com/esphome/esphome/issues/2101) confusion between
+the brightness frame and a power-off frame does not apply here. See
+[`PROTOCOL.md`](../PROTOCOL.md).
+
 ### H. Swing
 
-Only if your unit has motorised louvres:
+Only if your unit has motorised louvres. Many LP-series portables have a fixed vane
+and no Swing button at all, in which case there is nothing to capture and the
+component should not offer a swing control.
 
 ```
 # state: mode=cool temp=24 fan=high swing=on button=swing
 # state: mode=cool temp=24 fan=high swing=off button=swing
 ```
+
+**Already captured, and unlike Light it is a real state.** Byte 8 holds it in mask
+`0x38`, `0` for off and `7` for on, alongside the fan speed in `0x07`. Because the
+frame reports it, the climate entity can expose swing as a mode and read it back.
+See [`PROTOCOL.md`](../PROTOCOL.md).
 
 ## Saving the logs
 

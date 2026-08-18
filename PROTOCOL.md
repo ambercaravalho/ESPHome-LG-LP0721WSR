@@ -2,7 +2,7 @@
 
 ## Status
 
-Measured from 40 captures of the original remote, recorded with
+Measured from 86 captures of the original remote, recorded with
 [`firmware/xiao-ir-capture.yaml`](firmware/xiao-ir-capture.yaml) and analysed with
 [`tools/decode.py`](tools/decode.py). The raw session is committed as
 [`captures/session-01.txt`](captures/session-01.txt) so every claim here is
@@ -10,7 +10,7 @@ reproducible.
 
 | Item | Status |
 | --- | --- |
-| Framing and pulse timings | **Measured**, 40 captures |
+| Framing and pulse timings | **Measured**, 86 captures |
 | Frame length: 112 bits / 14 bytes | **Measured** |
 | Byte order: LSB-first | **Measured** — the checksum only closes in this reading |
 | Statefulness: every frame carries the full state | **Measured**, no toggle or sequence bit |
@@ -18,9 +18,12 @@ reproducible.
 | Power bit | **Measured** |
 | Mode field, Cool / Dry / Fan | **Measured** |
 | Temperature field, 16–30 °C | **Measured** across the entire range |
-| Checksum | **Measured** and consistent across every frame, though not yet unique |
+| Checksum | **Measured** — a plain byte sum, now the only algorithm that fits |
 | Fan field | **Measured** — two speeds, which is all this unit has |
-| Timer, Light, Swing | Not yet captured |
+| Timer, 1–24 h | **Measured** across the entire range |
+| Light | **Measured** — a pure toggle, one frame, no readable state |
+| Swing | **Measured** — a real state in byte 8, on and off |
+| Byte 8 bit `0x40` | **Observed**; probably the remote's timer-setting mode, see below |
 
 ## Why the stock component cannot work
 
@@ -62,20 +65,27 @@ that reading, which is the one where the checksum closes — the raw MSB-first v
 is only useful for spotting the bit order in the first place.
 
 ```
-  byte   0  1  2  3  4   5     6     7     8   9 10 11 12   13
-        23 CB 26 01 00  pwr  mode  temp  fan   00 00 00 00  cksum
-        \------------/  \--------------------/              \--/
-          constant            state                       checksum
+  byte   0  1  2  3  4   5     6     7     8     9    10 11 12   13
+        23 CB 26 01 00  flg  mode  temp  fan+  timer  00 00 00  cksum
+        \------------/  \--------------------------/            \--/
+          constant                  state                     checksum
+
+  byte 5   . f . . t . p .        byte 8   . m s s s f f f
+           0x40 light             0x40 remote timer mode
+           0x08 timer armed       0x38 swing
+           0x04 power             0x07 fan
+           0x20 always set
 ```
 
 | Byte | Field | Encoding |
 | --- | --- | --- |
 | 0–4 | Constant | Always `23 CB 26 01 00` |
-| 5 | Power | `0x24` on, `0x20` off — only bit `0x04` moves |
+| 5 | Power + flags | Base `0x20`; `0x04` = on, `0x08` = timer armed, `0x40` = Light press |
 | 6 | Mode | Cool `0x03`, Dry `0x02`, Fan `0x07` |
 | 7 | Temperature | `31 − °C`, so 16 °C is `0x0F` and 30 °C is `0x01` |
-| 8 | Fan | Low `0x02`, High `0x05` |
-| 9–12 | Constant | Always zero in everything captured so far |
+| 8 | Fan, swing, timer mode | Fan `0x07`: Low `0x02`, High `0x05`. Swing `0x38`: off `0`, on `7` |
+| 9 | Timer | Ten-minute units: hours × 6. `0` = off |
+| 10–12 | Constant | Zero in all 86 captures |
 | 13 | Checksum | See below |
 
 Power and mode are independent: an off frame keeps the mode, temperature and fan
@@ -88,43 +98,146 @@ The temperature encoding is confirmed across all fifteen values. Note it counts
 idempotent and retransmits the same frame, which is a convenient way to get
 repeated identical frames for a determinism check.
 
+## Timer
+
+Three things move together when the timer is set:
+
+| | Timer off | Timer set to *h* hours |
+| --- | --- | --- |
+| Byte 5 | `0x24` | `0x2C` — bit `0x08` set |
+| Byte 9 | `0x00` | `h × 6` |
+| Byte 8 | `0x05` | `0x45` — bit `0x40` set |
+
+Byte 9 counts **ten-minute units**, not hours: each press of Timer advanced it by
+exactly 6, from `0x06` at 1 hour to `0x90` at 24 hours. The remote only offers
+whole hours, so only multiples of 6 were ever transmitted. Whether the unit honours
+an intermediate value such as `0x03` for 30 minutes is untested — the remote cannot
+produce one, so it can only be answered by transmitting a frame the remote never
+sends. Worth trying, since it would make the Home Assistant timer usefully finer
+than the physical remote.
+
+At 24 hours the next press rolls over to a frame byte-for-byte identical to the
+first Timer press, with byte 9 back to `0x00` and byte 5's `0x08` cleared. So zero
+genuinely means off; there is no separate disarm command.
+
+Byte 8's `0x40` bit rides along on every frame sent while the timer is being set,
+making byte 8 read `0x45` rather than `0x05`. It is **not** the "timer armed" flag —
+byte 5's `0x08` is that, and `0x40` stayed set on the rolled-over frame where the
+timer was already off.
+
+It appears to be the remote's own timer-setting mode rather than anything about the
+AC's state. Eleven minutes elapsed between the last Timer press and the first Light
+press with no button touched in between, and by then the bit had cleared on its
+own. A remote-side UI mode that times out explains that; a field describing the
+unit's configuration does not.
+
+That leaves it likely optional for transmission, but unverified: no capture yet
+shows a frame with byte 5's `0x08` set while byte 8's `0x40` is clear, so we cannot
+yet prove the AC accepts an armed timer without it. Arming a timer, waiting for the
+remote to leave timer mode, then pressing `∧` would produce exactly that frame and
+settle it.
+
+Only `0x45` was captured, never `0x42`, because every timer capture was at fan
+High. A frame combining the timer with fan Low is therefore predicted rather than
+observed.
+
+## Swing
+
+Unlike Light, swing is a real state that the frame reports, so the climate entity
+can expose it as a swing mode and read it back rather than firing blind:
+
+```
+swing on   23 CB 26 01 00 24 03 07 3D 00 00 00 00 80
+swing off  23 CB 26 01 00 24 03 07 05 00 00 00 00 48
+```
+
+Byte 8 goes from `0x05` to `0x3D`, which is the same fan value with `0x38` added.
+That is three adjacent bits moving together, so byte 8 is packed rather than being
+the fan byte the earlier captures made it look like:
+
+| Mask | Meaning |
+| --- | --- |
+| `0x07` | Fan — Low `0x02`, High `0x05` |
+| `0x38` | Swing — `0` off, `7` on |
+| `0x40` | The remote's timer-setting mode, above |
+| `0x80` | Never observed set |
+
+Reading swing as a three-bit field rather than three independent flags is a guess,
+but a well-motivated one: LG's vertical-swing field conventionally holds a louvre
+position, with the all-ones value meaning "sweep continuously" and lower values
+selecting fixed angles. If that holds here, values `1`–`6` would be fixed vane
+positions that the remote has no button for, reachable only by transmitting them.
+That would be a genuine feature gain over the physical remote, and it is safe to
+probe since an unsupported value is most likely ignored.
+
+## Light
+
+A pure toggle, and the simplest field here. Seven consecutive presses produced
+byte-identical frames:
+
+```
+23 CB 26 01 00 64 03 07 05 00 00 00 00 88
+```
+
+Byte 5 becomes `0x64`, which is the normal `0x24` plus bit `0x40`. Everything else
+is the ordinary current state. The frame carries no light *value*: the unit walks
+On → Dim → Off internally, one step per frame received, so there is nothing to
+read back and no way to command a specific brightness. A button entity is the
+honest mapping, not a select.
+
+Worth recording that the trap this was checked for does not apply. On some LG
+protocols the display-brightness frame is a near-copy of the power-off frame,
+differing by one nibble, so a decoder can turn the unit off when the user dims the
+display ([esphome#2101](https://github.com/esphome/esphome/issues/2101)). Here the
+Light frame keeps the power bit `0x04` set and adds a bit of its own, so the two
+are never one nibble apart and cannot be confused.
+
 ## Checksum
 
 ```
 byte13 = (byte0 + byte1 + ... + byte12) & 0xFF
 ```
 
-Consistent across all 40 captures. Two worked examples:
+Consistent across all 86 captures, and now the **only** algorithm that fits. Three
+worked examples:
 
 ```
-Cool 30C  23 CB 26 01 00 24 03 01 05 00 00 00 00  -> sum 0x142 -> 0x42
-Off  24C  23 CB 26 01 00 20 03 07 05 00 00 00 00  -> sum 0x144 -> 0x44
+Cool 30C        23 CB 26 01 00 24 03 01 05 00 00 00 00  -> sum 0x142 -> 0x42
+Off  24C        23 CB 26 01 00 20 03 07 05 00 00 00 00  -> sum 0x144 -> 0x44
+Cool 24C 24h    23 CB 26 01 00 2C 03 07 45 90 00 00 00  -> sum 0x220 -> 0x20
 ```
 
-`decode.py` still reports eight hypotheses that fit, but they are not eight
-independent theories:
+The timer is what settled this. Until then `nibble_sum` fitted just as well,
+because every byte that varied had a zero high nibble (`0x03`, `0x07`, `0x05`) and
+for such bytes the value *equals* its nibble sum. The two can only diverge once a
+varying byte exceeds `0x0F`, which nothing did until byte 9 reached `0x10` and
+byte 8 became `0x45`. At 24 hours the gap is decisive: the byte sum gives `0x20`
+and matches, while `nibble_sum` predicts `0x8C`.
 
-- Variants starting at nibble 1, 2, 3 or 4 are the same sum with part of the
-  constant prefix omitted, and the difference absorbed into a constant offset.
-- `nibble_sum` survives alongside `byte_sum` because every byte that actually
-  varies has a zero high nibble (`0x03`, `0x07`, `0x05`), and for such bytes the
-  value equals the nibble sum. The two only diverge once a varying byte exceeds
-  `0x0F`.
-
-So the plain byte sum with no offset is the only candidate needing no unexplained
-constant, and a timer value of 1–24 hours is the field most likely to finally
-separate it from `nibble_sum`.
+`decode.py` reports this as one algorithm in three equivalent forms. The other two
+start at nibble 2 or 4 and add `0x23` or `0xEE` straight back — the same sum with
+part of the constant prefix omitted and folded into the offset. Those are not
+rival theories and no further capture can separate them, because the bytes they
+skip never change. The tool used to list them as separate hypotheses and advise
+capturing more states, which was advice that could never be satisfied.
 
 ## What is left
 
-1. **Timer.** Unknown, and probably where bytes 9–12 stop being zero. Also the
-   likeliest way to pin the checksum down uniquely.
-2. **Light and Swing.** Unknown. If each press produces an identical frame they
-   are pure toggles and one captured frame each is enough.
-3. **Heat.** Not applicable to the LP0721WSR, which is cooling only. The mode
+Every button on the remote is now accounted for. What remains is all reachable only
+by transmitting frames the remote cannot produce, so it belongs to hardware testing
+rather than capture:
+
+1. **Fixed vane positions.** Whether swing values `1`–`6` select louvre angles, as
+   the field width suggests.
+2. **Sub-hour timer values.** Byte 9 is in ten-minute units but the remote only
+   emits multiples of 6. Transmitting `0x03` would show whether the unit accepts
+   30 minutes.
+3. **Byte 8 bit `0x40`.** Whether an armed timer is accepted without it. See the
+   test described above.
+4. **Heat.** Not applicable to the LP0721WSR, which is cooling only. The mode
    nibble has room for it on `SHR` variants.
-4. **Bytes 9–12.** Constant zero so far. Timer or swing state is the obvious
-   candidate for what lives there.
+5. **Bytes 10–12, and byte 8's `0x80`.** Constant across all 86 captures. Nothing
+   on this remote drives them.
 
 ## Escape hatch
 
