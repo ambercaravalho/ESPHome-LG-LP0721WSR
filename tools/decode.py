@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import statistics
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from functools import reduce
 from itertools import combinations
@@ -484,6 +485,32 @@ def find_checksums(frames: Sequence[Frame], bit_order: str) -> List[ChecksumMatc
     return matches
 
 
+def collapse_checksums(
+    matches: Sequence[ChecksumMatch],
+) -> List[Tuple[ChecksumMatch, int]]:
+    """Fold away candidates that differ only in where the sum starts.
+
+    ``byte_sum(nibbles[2:]) + 0x23`` is not a rival theory to
+    ``byte_sum(nibbles[0:])``; it is the same sum with a constant leading byte
+    omitted and added straight back. Whenever the skipped nibbles belong to the
+    frame's constant prefix the two agree on every valid frame, so no amount of
+    further capture will separate them. Listing both invites a hunt for evidence
+    that cannot exist.
+
+    Keeps the form starting nearest nibble 0 for each distinct algorithm, and
+    reports how many equivalent spellings collapsed into it.
+    """
+    best: Dict[Tuple, ChecksumMatch] = {}
+    counts: Counter = Counter()
+    for match in matches:
+        key = (match.bit_order, match.algorithm, match.sign, match.checksum_nibbles)
+        counts[key] += 1
+        current = best.get(key)
+        if current is None or match.skip_nibbles < current.skip_nibbles:
+            best[key] = match
+    return [(match, counts[key]) for key, match in best.items()]
+
+
 def bits_value_from_nibbles(nibbles: Sequence[int]) -> int:
     value = 0
     for nibble in nibbles:
@@ -550,16 +577,23 @@ def report(frames: Sequence[Frame], timing: Timing, bit_orders: Sequence[str], v
     print(banner("CHECKSUM CANDIDATES"))
     all_matches: List[ChecksumMatch] = []
     for order in bit_orders:
-        matches = find_checksums(frames, order)
-        all_matches.extend(matches)
+        matches = collapse_checksums(find_checksums(frames, order))
+        all_matches.extend(match for match, _ in matches)
         if matches:
-            for match in matches:
-                print(match.describe())
+            for match, forms in matches:
+                suffix = (
+                    f"   [{forms} equivalent forms, differing only in where the sum starts]"
+                    if forms > 1
+                    else ""
+                )
+                print(match.describe() + suffix)
         else:
             print(f"  {order}-first: no consistent checksum found")
     if len(all_matches) > 1:
         print("\n  More than one hypothesis fits. Capture more distinct states to")
         print("  eliminate the coincidences, then re-run.")
+    elif len(all_matches) == 1:
+        print("\n  Exactly one algorithm fits every captured frame.")
 
     # Every field change also changes the checksum, so knowing where the
     # checksum lives lets us report real fields instead of a field plus its
