@@ -57,6 +57,10 @@ remote_transmitter:
   # Seeed's reference config specifies 50%; the three emitters are driven hard
   # enough that a higher duty cycle risks browning out over USB power.
   carrier_duty_percent: 50%
+  # The default since 2025.11.0, set explicitly to silence the warning about it.
+  # This is also what lets the emitter be shared: a blocking transmit would stall
+  # the loop for the ~70ms an LG frame takes.
+  non_blocking: true
 
 remote_receiver:
   id: ir_rx

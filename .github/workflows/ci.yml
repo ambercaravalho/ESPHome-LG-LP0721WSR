@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # esphome is installed unpinned, so this is what turns "a future ESPHome
+  # release renamed something the component uses" into a Monday morning email
+  # rather than a failed flash.
+  schedule:
+    - cron: "0 6 * * 1"
 
 jobs:
   tools:
@@ -63,10 +68,15 @@ jobs:
           ota_password: "ci-ota-password"
           EOF
 
-      - name: Validate both firmware configs
+      - name: Validate every firmware config
+        # example-generic-blaster.yaml is the one that matters for packaging: it
+        # is deliberately non-XIAO hardware with differently named IR ids, so it
+        # fails if packages/lg-portable-ac.yaml ever grows a dependency on this
+        # board's LED, motor or scripts.
         run: |
           esphome config firmware/xiao-lg-lp0721wsr.yaml
           esphome config firmware/xiao-ir-capture.yaml
+          esphome config firmware/example-generic-blaster.yaml
 
   links:
     name: Documentation links

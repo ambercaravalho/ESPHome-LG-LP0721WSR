@@ -1,17 +1,16 @@
 # LG LP0721WSR portable air conditioner, controlled over IR by a Seeed Studio
 # XIAO Smart IR Mate.
 #
+# This is one worked example of using packages/lg-portable-ac.yaml. If you
+# already have an IR blaster running ESPHome, you do not need this file at all:
+# add that package to your existing config instead. See README.md.
+#
 # Before flashing:
 #   1. Copy firmware/secrets.yaml.example to firmware/secrets.yaml and fill it
 #      in. Take `api_encryption_key` and `ota_password` from the config your
 #      device is already running, or the OTA update will be rejected.
-#   2. Point `room_temperature_entity` at a temperature sensor you already have
-#      in the room, or delete the `sensor:` block below. The AC does not report
-#      its own temperature, so this is the only way the climate card can show a
-#      current temperature.
-#   3. Nothing. The protocol is measured from this unit's own remote and the
-#      component defaults to it, so the `climate:` block below needs no tuning.
-#      research/PROTOCOL.md records the evidence if you want to check it.
+#   2. Point `lg_ac_temperature_entity` at a temperature sensor you already have
+#      in the room.
 
 substitutions:
   # Must match the name the device already answers to, or Home Assistant treats
@@ -25,54 +24,38 @@ substitutions:
   # Keep the raw dumper on: it costs nothing and it is how you compare what we
   # transmit against what the real remote sends. Set to "none" once happy.
   ir_dump: "raw"
-  room_temperature_entity: "sensor.living_room_temperature"
+
+  # Consumed by packages/lg-portable-ac.yaml. The transmitter and receiver ids
+  # match the ones xiao-hardware.yaml defines, so they are left at their
+  # defaults. `None` makes the climate entity inherit ${friendly_name}, which is
+  # what you want on a device dedicated to the AC.
+  lg_ac_name: "None"
+  lg_ac_temperature_entity: "sensor.living_room_temperature"
 
 packages:
   hardware: !include packages/xiao-hardware.yaml
-  extras: !include packages/lg-extras.yaml
+  lg_ac: !include packages/lg-portable-ac.yaml
 
 external_components:
-  # Local checkout. If you are pasting this into Home Assistant's ESPHome
-  # dashboard rather than running it from a clone, swap this for:
-  #
-  #   - source: github://ambercaravalho/ESPHome-LG-LP0721WSR
-  #     components: [lg_portable_ac]
-  #
+  # Local checkout, because this config lives in the repo. Configs outside it
+  # should use the GitHub source shown in packages/lg-portable-ac.yaml.
   - source:
       type: local
       path: ../components
     components: [lg_portable_ac]
 
-sensor:
-  - platform: homeassistant
-    id: room_temperature
-    entity_id: ${room_temperature_entity}
-    internal: true
+# The AC package is deliberately hardware-agnostic, so it does not know about
+# this board's LED and vibration motor. `!extend` adds the acknowledgement to
+# the entities it defined rather than redefining them.
+button:
+  - id: !extend lg_ac_light_button
+    on_press:
+      - script.execute: ack_transmit
 
-climate:
-  - platform: lg_portable_ac
-    id: ac
-    # `None` makes the entity take the device's friendly name, so you get
-    # climate.portable_ac rather than climate.portable_ac_portable_ac.
-    name: None
-    icon: mdi:air-conditioner
-    transmitter_id: ir_tx
-    # Wiring the receiver in is what keeps Home Assistant honest: press the
-    # physical remote and the entity follows, instead of silently drifting.
-    receiver_id: ir_rx
-    sensor: room_temperature
-
-    # Set false on units with a fixed vane, purely to hide the control.
-    supports_swing: true
-
-    # The timings are measured and are already the component's defaults, so this
-    # block is here to be explicit rather than because it is required. Only touch
-    # it if your own captures disagree; see research/PROTOCOL.md.
-    header_high: 3150us
-    header_low: 1590us
-    bit_high: 550us
-    bit_one_low: 1070us
-    bit_zero_low: 290us
+number:
+  - id: !extend lg_ac_timer
+    set_action:
+      - script.execute: ack_transmit
 
 binary_sensor:
   # Tap the top of the IR Mate to toggle the AC without a phone.

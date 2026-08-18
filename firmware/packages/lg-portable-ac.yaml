@@ -1,0 +1,108 @@
+# LG LP0721WSR portable air conditioner, as a drop-in ESPHome package.
+#
+# This defines the AC's entities and nothing else -- no esphome:, wifi:, api:,
+# ota: or hardware -- so it can be added to a device you already have without
+# disturbing anything on it. The transmitter and receiver are referenced by id
+# rather than defined here, and both can be shared: an IR blaster running this
+# can still drive a TV or anything else from the same emitter.
+#
+# In your device's config:
+#
+#   external_components:
+#     - source: github://ambercaravalho/ESPHome-LG-LP0721WSR
+#       components: [lg_portable_ac]
+#
+#   packages:
+#     lg_ac: github://ambercaravalho/ESPHome-LG-LP0721WSR/firmware/packages/lg-portable-ac.yaml@main
+#
+# Then override any of the substitutions below in your own `substitutions:`
+# block. The protocol needs no tuning: it is measured from this unit's own
+# remote and the component defaults to it. See research/PROTOCOL.md.
+
+substitutions:
+  # Ids of the remote_transmitter and remote_receiver your device already
+  # defines. The receiver is what keeps Home Assistant honest -- press the
+  # physical remote and the entity follows instead of silently drifting -- so
+  # wire it up if the hardware has one.
+  lg_ac_transmitter_id: ir_tx
+  lg_ac_receiver_id: ir_rx
+
+  lg_ac_id: ac
+  # "None" makes the entity take the device's friendly name, which gives you
+  # climate.portable_ac rather than climate.portable_ac_portable_ac. Set a real
+  # name here if the device is doing more than just the AC.
+  lg_ac_name: "Portable AC"
+
+  # The AC does not report its own temperature, so the climate card's "current
+  # temperature" can only come from a sensor you already have in that room.
+  lg_ac_temperature_entity: sensor.living_room_temperature
+
+  # Set to "false" on units with a fixed vane, purely to hide the control.
+  # Harmless to leave on: such a unit simply ignores the bits.
+  lg_ac_supports_swing: "true"
+
+sensor:
+  - platform: homeassistant
+    id: lg_ac_room_temperature
+    entity_id: ${lg_ac_temperature_entity}
+    internal: true
+
+climate:
+  - platform: lg_portable_ac
+    id: ${lg_ac_id}
+    name: ${lg_ac_name}
+    icon: mdi:air-conditioner
+    transmitter_id: ${lg_ac_transmitter_id}
+    receiver_id: ${lg_ac_receiver_id}
+    sensor: lg_ac_room_temperature
+    supports_swing: ${lg_ac_supports_swing}
+
+# The climate entity covers power, mode, setpoint, fan speed and swing. Two
+# buttons on the remote are left over, and they are quite different from each
+# other:
+#
+#   Light  is a press, not a state. The unit cycles On -> Dim -> Off internally
+#          and the protocol never reports which one it is on, so this can only
+#          ever be a button.
+#   Timer  is a state, and an absolute one. Byte 9 states the whole value, so
+#          twelve hours is a single transmission rather than twelve presses.
+button:
+  - platform: template
+    id: lg_ac_light_button
+    name: "Display Brightness"
+    icon: mdi:brightness-6
+    entity_category: config
+    on_press:
+      - lg_portable_ac.light_toggle: ${lg_ac_id}
+
+number:
+  # Zero disarms. Unlike the physical remote there is no walking the counter
+  # round past 24 to cancel, and no need to press briskly before the remote
+  # drops out of timer-setting mode.
+  #
+  # `lambda` rather than `optimistic: true` so the value follows the unit when
+  # somebody uses the real remote: the component reads the timer out of every
+  # frame it receives. Returning nothing when the value has not moved keeps the
+  # poll from republishing an unchanged number every 15 seconds, which is
+  # harmless in itself but buries the transmit and receive lines in the log.
+  - platform: template
+    id: lg_ac_timer
+    name: "Delay Timer"
+    icon: mdi:timer-outline
+    entity_category: config
+    unit_of_measurement: "h"
+    device_class: duration
+    update_interval: 15s
+    min_value: 0
+    max_value: 24
+    step: 1
+    mode: box
+    lambda: |-
+      const float hours = id(${lg_ac_id}).get_timer_hours();
+      if (id(lg_ac_timer).has_state() && id(lg_ac_timer).state == hours)
+        return {};
+      return hours;
+    set_action:
+      - lg_portable_ac.set_timer:
+          id: ${lg_ac_id}
+          hours: !lambda return (uint8_t) x;

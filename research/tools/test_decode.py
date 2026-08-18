@@ -285,7 +285,7 @@ class KnownFrameTest(unittest.TestCase):
         self.assertEqual(lg28_frame(0x00, 21, 0x4), 0x880064A)
 
     def test_display_brightness_frame(self):
-        # The frame firmware/packages/lg-extras.yaml sends for the Light button.
+        # The frame packages/lg-portable-ac.yaml sends for the Light button.
         self.assertEqual(lg28_frame(0xC0, 15, 0xA), 0x88C00A6)
 
     def test_checksum_is_the_low_nibble(self):

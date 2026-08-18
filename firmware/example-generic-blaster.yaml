@@ -1,0 +1,96 @@
+# Adding the AC to an IR blaster that already exists and already does other
+# things. This is the shape most people want: the AC is a few extra entities on
+# a device you already run, not a device dedicated to it.
+#
+# Nothing here is XIAO-specific. It is a plain ESP32 with a transmitter and
+# receiver on arbitrary pins, under names of its own choosing, plus an unrelated
+# TV button sharing the same emitter -- which works because a
+# remote_transmitter takes as many consumers as you like.
+#
+# CI validates this file to keep packages/lg-portable-ac.yaml honestly portable.
+# It is an example, so the pins are made up; change them to match your hardware
+# before flashing.
+
+substitutions:
+  name: "living-room-blaster"
+  friendly_name: "Living Room Blaster"
+
+  # Everything the AC package needs to know about this device. The transmitter
+  # and receiver ids are not the package defaults, which is the point: it binds
+  # to whatever your device already calls them.
+  lg_ac_transmitter_id: blaster_tx
+  lg_ac_receiver_id: blaster_rx
+  # Set explicitly because this device is not solely the AC, so inheriting
+  # "Living Room Blaster" as the climate entity's name would be misleading.
+  lg_ac_name: "Portable AC"
+  lg_ac_temperature_entity: "sensor.living_room_temperature"
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+remote_transmitter:
+  id: blaster_tx
+  pin: GPIO12
+  carrier_duty_percent: 50%
+  non_blocking: true
+
+remote_receiver:
+  id: blaster_rx
+  pin:
+    number: GPIO13
+    inverted: true
+  # The LP0721WSR frame is 112 bits, which is 224 symbols before the header and
+  # terminator, so the defaults truncate it. packages/xiao-hardware.yaml
+  # explains why each of these is set the way it is; copy them across if your
+  # blaster is to receive from the LG remote as well as transmit.
+  tolerance: 55%
+  idle: 15ms
+  filter: 100us
+  receive_symbols: 512
+  buffer_size: 20000b
+
+external_components:
+  # Local path because this example lives in the repo and CI validates it
+  # without network access. In your own config use the GitHub source instead:
+  #
+  #   - source: github://ambercaravalho/ESPHome-LG-LP0721WSR
+  #     components: [lg_portable_ac]
+  #
+  - source:
+      type: local
+      path: ../components
+    components: [lg_portable_ac]
+
+packages:
+  lg_ac: !include packages/lg-portable-ac.yaml
+
+# Unrelated to the AC, and the point of the example: the same emitter still
+# drives whatever else you were using it for.
+button:
+  - platform: template
+    name: "TV Power"
+    on_press:
+      - remote_transmitter.transmit_nec:
+          transmitter_id: blaster_tx
+          address: 0x04FB
+          command: 0x08F7
