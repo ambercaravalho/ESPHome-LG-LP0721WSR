@@ -90,10 +90,14 @@ static const uint8_t TIMER_OFF = 0;
 
 // Byte 12 is zero while the remote shows Celsius and 0x80 | degrees Fahrenheit
 // once its display is switched over. Byte 7 carries the rounded Celsius setpoint
-// either way, so decoding can rely on byte 7 alone. We transmit zero here, which
-// is what the remote does in Celsius mode and what all but four captures show.
+// either way, so the two always agree but are not redundant: 1F is a finer step
+// than 1C, so Fahrenheit is the higher-resolution way to state a setpoint.
 static const uint8_t FAHRENHEIT_FLAG = 0x80;
 static const uint8_t FAHRENHEIT_MASK = 0x7F;
+/// How far from a whole degree Celsius a request has to be before we take it as
+/// evidence of a Fahrenheit UI. Half a degree F is ~0.28C, so this sits well inside
+/// that while ignoring float noise.
+static const float WHOLE_CELSIUS_EPSILON = 0.05f;
 
 // ===========================================================================
 
@@ -180,6 +184,12 @@ class LgPortableAcClimate : public climate_ir::ClimateIR {
   /// An off frame keeps the mode byte of the state the unit was in, so powering
   /// off does not tell us to forget the mode. Tracked to reproduce that.
   climate::ClimateMode last_active_mode_{climate::CLIMATE_MODE_COOL};
+
+  /// Whether to state the setpoint in Fahrenheit as well (byte 12). Latched rather
+  /// than decided per frame, because 77F is exactly 25C: judging each request on
+  /// its own would silently drop back to Celsius at that one value and flip the
+  /// unit's display back and forth as the setpoint moved past it.
+  bool fahrenheit_{false};
 };
 
 template<typename... Ts> class SendRawFrameAction : public Action<Ts...>, public Parented<LgPortableAcClimate> {

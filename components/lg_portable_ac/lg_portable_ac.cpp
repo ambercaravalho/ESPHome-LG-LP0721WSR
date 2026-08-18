@@ -1,5 +1,6 @@
 #include "lg_portable_ac.h"
 
+#include <cmath>
 #include <cstring>
 
 #include "esphome/core/log.h"
@@ -101,7 +102,18 @@ Frame LgPortableAcClimate::encode_state_() {
   // Byte 7 carries the setpoint in every mode, including Fan, where the unit
   // has no setpoint to act on. The remote transmits the last one regardless.
   const float target = clamp(this->target_temperature, TEMPERATURE_MIN_C, TEMPERATURE_MAX_C);
-  frame[IDX_TEMPERATURE] = TEMPERATURE_BASE - (uint8_t) roundf(target);
+  const int celsius = (int) lroundf(target);
+  frame[IDX_TEMPERATURE] = TEMPERATURE_BASE - (uint8_t) celsius;
+
+  // A request that is not a whole degree Celsius came from a Fahrenheit UI, where
+  // Home Assistant converts before sending: 78F arrives as 25.56C. Rounding that
+  // to 26C and saying nothing else would ask for 78.8F, so state the Fahrenheit
+  // value too, exactly as the remote does when its display is switched over. Byte 7
+  // stays the rounded Celsius equivalent, which is what the remote sends alongside.
+  if (fabsf(target - celsius) > WHOLE_CELSIUS_EPSILON)
+    this->fahrenheit_ = true;
+  if (this->fahrenheit_)
+    frame[IDX_FAHRENHEIT] = FAHRENHEIT_FLAG | (uint8_t) lroundf(target * 9.0f / 5.0f + 32.0f);
 
   frame[IDX_FAN] = this->fan_byte_();
   frame[IDX_TIMER] = this->timer_hours_ * TIMER_UNITS_PER_HOUR;
@@ -242,6 +254,21 @@ bool LgPortableAcClimate::decode_frame_(const Frame &frame) {
     ESP_LOGW(TAG, "setpoint byte 0x%02X decodes to %dC, out of range", encoded_temp, target);
   }
 
+  // Byte 12 states the same setpoint more precisely, so prefer it where present.
+  // Taking the rounded Celsius from byte 7 instead would make a Fahrenheit setpoint
+  // drift by up to a degree F every time it round-tripped through us. Following the
+  // sender's choice of unit also means the physical remote's display mode wins,
+  // which is what someone pressing its unit button is asking for.
+  this->fahrenheit_ = (frame[IDX_FAHRENHEIT] & FAHRENHEIT_FLAG) != 0;
+  if (this->fahrenheit_) {
+    const uint8_t fahrenheit = frame[IDX_FAHRENHEIT] & FAHRENHEIT_MASK;
+    const float precise = (fahrenheit - 32) * 5.0f / 9.0f;
+    if (precise >= TEMPERATURE_MIN_C - 1.0f && precise <= TEMPERATURE_MAX_C + 1.0f) {
+      this->target_temperature = clamp(precise, TEMPERATURE_MIN_C, TEMPERATURE_MAX_C);
+    }
+    ESP_LOGD(TAG, "setpoint stated as %uF", fahrenheit);
+  }
+
   switch (frame[IDX_FAN] & FAN_MASK) {
     case FAN_LOW:
       this->fan_mode = climate::CLIMATE_FAN_LOW;
@@ -267,12 +294,6 @@ bool LgPortableAcClimate::decode_frame_(const Frame &frame) {
   // normal state report and has already been applied above.
   if (frame[IDX_FLAGS] & FLAG_LIGHT)
     ESP_LOGD(TAG, "display brightness advanced one step");
-
-  // The remote's display is in Fahrenheit. Byte 7 above is still the setpoint and
-  // still in Celsius, so nothing changes here; this only explains why a byte we
-  // otherwise transmit as zero came back set.
-  if (frame[IDX_FAHRENHEIT] & FAHRENHEIT_FLAG)
-    ESP_LOGD(TAG, "remote is displaying %uF", frame[IDX_FAHRENHEIT] & FAHRENHEIT_MASK);
 
   this->publish_state();
   return true;

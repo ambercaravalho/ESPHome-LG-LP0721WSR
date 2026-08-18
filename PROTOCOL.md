@@ -23,7 +23,7 @@ reproducible.
 | Timer, 1–24 h | **Measured** across the entire range |
 | Light | **Measured** — a pure toggle, one frame, no readable state |
 | Swing | **Measured** — a real state in byte 8, on and off |
-| Fahrenheit display | **Measured** — byte 12 carries the F setpoint |
+| Fahrenheit setpoint | **Measured** — byte 12, acted on by the unit, finer than 1 °C |
 | Byte 8 bit `0x40` | **Observed**; probably the remote's timer-setting mode, see below |
 
 ## Why the stock component cannot work
@@ -167,13 +167,27 @@ per-frame counter would have contradicted the statefulness the rest of this
 document depends on, so the distinction matters.
 
 The interesting consequence is that Fahrenheit mode is the finer-grained control
-surface. Whether the unit acts on byte 12 or merely displays it is untested — byte
-7 was consistent in all four captures, so nothing here distinguishes them. If the
-unit does honour byte 12, transmitting it would give roughly 0.56 °C resolution
-instead of 1 °C.
+surface, giving roughly 0.56 °C resolution instead of 1 °C.
 
-This component transmits byte 12 as zero, matching the 87 Celsius-mode captures,
-which is the known-good behaviour.
+The component transmits byte 12, and this is **confirmed on hardware**: asking for
+78 °F from Home Assistant produced
+
+```
+     23 CB 26 01 00 24 03 05 3A 00 00 00 CE 49
+```
+
+and the unit's display switched to Fahrenheit and read exactly 78, not the 79 it
+would have shown had it converted 26 °C back. So the unit does act on byte 12, and
+byte 12 also drives which unit the display shows.
+
+The trigger is worth explaining, because the obvious rule is wrong. Home Assistant
+always sends Celsius, converting first when its own units are Fahrenheit, so 78 °F
+arrives as 25.56 °C — a value that is not a whole degree Celsius, which is the tell.
+But 77 °F is exactly 25.00 °C, so a per-frame test would fall back to Celsius at
+that one value and flip the display back and forth as the setpoint crossed it.
+The component therefore *latches*: any evidence of Fahrenheit turns it on, and only
+a received frame with byte 12 clear turns it off. That also lets the physical
+remote's unit button take precedence, which is what pressing it is asking for.
 
 ## Swing
 
@@ -270,9 +284,7 @@ rather than capture:
    test described above.
 4. **Heat.** Not applicable to the LP0721WSR, which is cooling only. The mode
    nibble has room for it on `SHR` variants.
-5. **Whether byte 12 is acted on or merely displayed.** If the unit honours it,
-   Fahrenheit mode offers a finer setpoint step than Celsius.
-6. **Bytes 10–11, and byte 8's `0x80`.** Constant across all 90 captures. Nothing
+5. **Bytes 10–11, and byte 8's `0x80`.** Constant across all 90 captures. Nothing
    on this remote drives them.
 
 ## Escape hatch

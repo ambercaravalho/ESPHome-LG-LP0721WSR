@@ -30,7 +30,9 @@ number:
   #
   # `lambda` rather than `optimistic: true` so the value follows the unit when
   # somebody uses the real remote: the component reads the timer out of every
-  # frame it receives.
+  # frame it receives. Returning nothing when the value has not moved keeps the
+  # poll from republishing an unchanged number every 15 seconds, which is harmless
+  # in itself but buries the transmit and receive lines we read the log for.
   - platform: template
     id: delay_timer
     name: "Delay Timer"
@@ -43,7 +45,11 @@ number:
     max_value: 24
     step: 1
     mode: box
-    lambda: return id(ac).get_timer_hours();
+    lambda: |-
+      const float hours = id(ac).get_timer_hours();
+      if (id(delay_timer).has_state() && id(delay_timer).state == hours)
+        return {};
+      return hours;
     set_action:
       - lg_portable_ac.set_timer:
           id: ac

@@ -26,6 +26,13 @@ The Delay Timer is absolute: setting 12 hours is one transmission, where the rem
 needs twelve presses and drops out of timer-setting mode if you pause. Both are
 easier from Home Assistant than from the remote.
 
+If Home Assistant is set to Fahrenheit, setpoints are sent in Fahrenheit, which the
+protocol carries separately and the unit acts on. That is a finer step than Celsius —
+about 0.56 °C — so asking for 78 °F gets you 78 and not the 79 you would land on by
+rounding through 26 °C. Nothing needs configuring for this; it follows your Home
+Assistant units, and picking up the remote and pressing its own unit button switches
+it back.
+
 ## Status
 
 **The protocol is measured, not inherited.** Every field is decoded from 90
