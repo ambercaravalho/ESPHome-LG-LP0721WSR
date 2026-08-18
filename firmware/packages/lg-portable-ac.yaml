@@ -34,13 +34,23 @@ substitutions:
   lg_ac_name: "Portable AC"
 
   # The AC does not report its own temperature, so the climate card's "current
-  # temperature" can only come from a sensor you already have in that room.
+  # temperature" can only come from something you already have in that room.
+  # Pointing this at a thermostat needs one extra line, because a climate
+  # entity's state is its HVAC mode rather than a number -- see the sensor below.
   lg_ac_temperature_entity: sensor.living_room_temperature
 
   # Set to "false" on units with a fixed vane, purely to hide the control.
   # Harmless to leave on: such a unit simply ignores the bits.
   lg_ac_supports_swing: "true"
 
+# Reads the entity's state, which suits a plain temperature sensor. To use a
+# thermostat or anything else that carries the reading in an attribute, add this
+# to your own config -- `attribute` has no safe default, so it cannot live here:
+#
+#   sensor:
+#     - id: !extend lg_ac_room_temperature
+#       attribute: current_temperature
+#
 sensor:
   - platform: homeassistant
     id: lg_ac_room_temperature

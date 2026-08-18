@@ -76,6 +76,16 @@ Then point it at your hardware with a `substitutions:` block:
 | `lg_ac_temperature_entity` | `sensor.living_room_temperature` | Supplies "current temperature", which the AC does not report |
 | `lg_ac_supports_swing` | `"true"` | Set `"false"` to hide the control on a fixed-vane unit |
 
+To take the temperature from a thermostat rather than a bare sensor, add the
+attribute that carries the reading — a climate entity's state is its HVAC mode,
+not a number:
+
+```yaml
+sensor:
+  - id: !extend lg_ac_room_temperature
+    attribute: current_temperature
+```
+
 [`firmware/example-generic-blaster.yaml`](firmware/example-generic-blaster.yaml)
 is a complete worked example on non-XIAO hardware, with a TV button sharing the
 same emitter. Copy its `remote_receiver` settings too: the ESPHome defaults
