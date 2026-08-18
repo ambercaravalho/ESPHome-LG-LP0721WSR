@@ -30,7 +30,10 @@ substitutions:
   # defaults. `None` makes the climate entity inherit ${friendly_name}, which is
   # what you want on a device dedicated to the AC.
   lg_ac_name: "None"
-  lg_ac_temperature_entity: "climate.living_room_thermostat"
+  # A plain sensor, so the reading is the entity's state and no `attribute:` is
+  # needed. The thermostat's own climate.* entity would need one, since a climate
+  # entity's state is its HVAC mode.
+  lg_ac_temperature_entity: "sensor.living_room_thermostat_current_temp"
 
 packages:
   hardware: !include packages/xiao-hardware.yaml
@@ -57,12 +60,13 @@ number:
     set_action:
       - script.execute: ack_transmit
 
-# The room temperature comes from a thermostat rather than a bare sensor, and a
-# climate entity's state is its HVAC mode, not a number. The reading lives in
-# the current_temperature attribute, so ask for that instead of the state.
+# The thermostat reports Fahrenheit, and the homeassistant sensor imports the
+# raw number without converting, while the climate component works in Celsius.
+# Without this, 78F arrives as 78C and Home Assistant renders it back as 172F.
 sensor:
   - id: !extend lg_ac_room_temperature
-    attribute: current_temperature
+    filters:
+      - lambda: return (x - 32.0f) * 5.0f / 9.0f;
 
 binary_sensor:
   # Tap the top of the IR Mate to toggle the AC without a phone.
