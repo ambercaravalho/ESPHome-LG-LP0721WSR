@@ -2,157 +2,136 @@
 
 ## Status
 
-**The frame layout implemented in `components/lg_portable_ac/` is a hypothesis,
-not a measured result.** It is the documented LG air-conditioner layout, which
-is field-tested against LG split systems but has not been confirmed against an
-LP-series portable. Nobody appears to have published a decode for this remote.
+Measured from 40 captures of the original remote, recorded with
+[`firmware/xiao-ir-capture.yaml`](firmware/xiao-ir-capture.yaml) and analysed with
+[`tools/decode.py`](tools/decode.py). The raw session is committed as
+[`captures/session-01.txt`](captures/session-01.txt) so every claim here is
+reproducible.
 
 | Item | Status |
 | --- | --- |
-| Frame layout (signature, command, temp, fan, checksum) | Hypothesis, from LG split systems |
-| Command byte values | Hypothesis, from LG split systems |
-| Temperature encoding `celsius - 15` | Hypothesis, from LG split systems |
-| Checksum: 4-bit sum of the preceding nibbles | Hypothesis, from LG split systems |
-| Pulse timings | Hypothesis, best guess for the LG "long header" family |
-| Everything above, for **your** unit | **Unverified. Capture required.** |
+| Framing and pulse timings | **Measured**, 40 captures |
+| Frame length: 112 bits / 14 bytes | **Measured** |
+| Byte order: LSB-first | **Measured** — the checksum only closes in this reading |
+| Statefulness: every frame carries the full state | **Measured**, no toggle or sequence bit |
+| Constant prefix, bytes 0–4 | **Measured** |
+| Power bit | **Measured** |
+| Mode field, Cool / Dry / Fan | **Measured** |
+| Temperature field, 16–30 °C | **Measured** across the entire range |
+| Checksum | **Measured** and consistent across all 40 frames, though not yet unique |
+| Fan field | Located, values **not** yet resolved |
+| Timer, Light, Swing | Not yet captured |
 
-Finishing this is mechanical, not exploratory: work through
-[`captures/README.md`](captures/README.md), run `tools/decode.py`, and either
-confirm the table below or replace it. The tool prints a drop-in replacement.
+## Why the stock component cannot work
 
-## Try this first: it may already work
+Worth recording, since "the official LG integration doesn't work" is what started
+this. It is not a configuration problem and no amount of tuning fixes it.
 
-Before writing anything off, rule out the boring explanation. ESPHome's built-in
-`climate_ir_lg` defaults to an **8000 µs / 4000 µs** header. A large share of LG
-remotes, including the portables, use roughly **3200 µs / 9900 µs** instead. A
-component with the wrong header timings does not misbehave, it simply gets
-ignored, which looks exactly like "unsupported protocol".
+ESPHome's `climate_ir_lg` implements a 28-bit frame with an 8000/4000 µs header.
+Some LG remotes instead use roughly 3200/9900 µs, which is the usual first thing
+to try. This remote is neither: **112 bits** with a **3150/1590 µs** header. It is
+four times the frame length, and the header space is off by a factor of six. A
+receiver looking for the LG protocol does not misdecode these frames, it discards
+them, which presents identically to "unsupported".
 
-So try the stock component with the other header first:
+## Framing
 
-```yaml
-climate:
-  - platform: climate_ir_lg
-    name: "Portable AC"
-    transmitter_id: ir_tx
-    receiver_id: ir_rx
-    header_high: 3200us
-    header_low: 9900us
-```
+38 kHz carrier assumed — standard for this class, but note that `remote_receiver`
+does not measure carrier frequency, so this is the one number here that is
+inherited rather than observed.
 
-If the unit responds, you are done and you do not need this repo's component at
-all. If it does not, continue below. Either way the capture is worth doing,
-because it is the only thing that turns a guess into a fact.
-
-## The hypothesised frame
-
-28 bits, most significant bit transmitted first, 38 kHz carrier.
-
-```
-  bit index   0        8               16       20       24
-              |        |               |        |        |
-              +--------+---------------+--------+--------+
-              |  0x88  |    command    |  temp  |  fan   | cksum
-              +--------+---------------+--------+--------+
-  width          8            8           4        4        4
-```
-
-Expressed as shifts from the least significant bit, which is how
-`lg_portable_ac.h` stores them:
-
-| Field | Shift | Width | Notes |
-| --- | --- | --- | --- |
-| Signature | `frame_bits - 8` | 8 | Always `0x88` |
-| Command | 12 | 8 | Power state and mode combined |
-| Temperature | 8 | 4 | `celsius - 15`, so 16 °C is `0x1` and 30 °C is `0xF` |
-| Fan | 4 | 4 | |
-| Checksum | 0 | 4 | |
-
-### Command byte
-
-LG distinguishes "switch on into mode X" from "change to mode X while already
-running", so the same requested mode produces different frames depending on what
-the unit was doing before. The component tracks this in `mode_before_`.
-
-| Command | Value | Meaning |
+| Element | Measured | Notes |
 | --- | --- | --- |
-| `CMD_OFF` | `0xC0` | Power off |
-| `CMD_ON_COOL` | `0x00` | Switch on into Cool |
-| `CMD_ON_DRY` | `0x01` | Switch on into Dry |
-| `CMD_ON_FAN_ONLY` | `0x02` | Switch on into Fan |
-| `CMD_ON_HEAT` | `0x04` | Switch on into Heat |
-| `CMD_COOL` | `0x08` | Change to Cool while running |
-| `CMD_DRY` | `0x09` | Change to Dry while running |
-| `CMD_FAN_ONLY` | `0x0A` | Change to Fan while running |
-| `CMD_HEAT` | `0x0C` | Change to Heat while running |
-| `CMD_SWING` | `0x10` | Toggle louvre swing |
+| Header mark | ~3150 µs | |
+| Header space | ~1590 µs | Not the ~9900 µs of other LG models |
+| Bit mark | ~550 µs | Constant; the bit value is in the space |
+| Space, `0` | ~290 µs | |
+| Space, `1` | ~1070 µs | |
+| Payload | 112 bits | 226 symbols, plus header pair and terminator = 228 |
+| Mid-frame gaps | none | Max non-terminal space observed is ~1100 µs |
 
-### Fan nibble
+A capture that reports anything other than 228 symbols is damaged. The usual
+cause is holding the remote too close, which saturates the receiver and merges
+adjacent bits; see the troubleshooting section of
+[`captures/README.md`](captures/README.md).
 
-| Speed | Value | Used by this unit |
+## Frame layout
+
+Each byte is transmitted least significant bit first. Every byte below is given in
+that reading, which is the one where the checksum closes — the raw MSB-first view
+is only useful for spotting the bit order in the first place.
+
+```
+  byte   0  1  2  3  4   5     6     7     8   9 10 11 12   13
+        23 CB 26 01 00  pwr  mode  temp  fan   00 00 00 00  cksum
+        \------------/  \--------------------/              \--/
+          constant            state                       checksum
+```
+
+| Byte | Field | Encoding |
 | --- | --- | --- |
-| Low | `0x0` | yes |
-| Medium | `0x2` | no, LP-series has two speeds |
-| High | `0x4` | yes |
-| Auto | `0x5` | transmitted only in the power-off frame |
+| 0–4 | Constant | Always `23 CB 26 01 00` |
+| 5 | Power | `0x24` on, `0x20` off — only bit `0x04` moves |
+| 6 | Mode | Cool `0x03`, Dry `0x02`, Fan `0x07` |
+| 7 | Temperature | `31 − °C`, so 16 °C is `0x0F` and 30 °C is `0x01` |
+| 8 | Fan | `0x05` at High in Cool; `0x02` in Dry and Fan mode |
+| 9–12 | Constant | Always zero in everything captured so far |
+| 13 | Checksum | See below |
 
-### Checksum
+Power and mode are independent: an off frame keeps the mode, temperature and fan
+bytes of the state it was in and only clears `0x04` in byte 5. So the component
+sets power and mode separately rather than needing a combined command table, which
+is what the previous hypothesis assumed.
 
-Sum every nibble above the checksum field, keep the low 4 bits:
+The temperature encoding is confirmed across all fifteen values. Note it counts
+*down*: 16 °C is `0x0F`, 30 °C is `0x01`. Pressing `∨` at 16 or `∧` at 30 is
+idempotent and retransmits the same frame, which is a convenient way to get
+repeated identical frames for a determinism check.
+
+## Checksum
 
 ```
-checksum = (n0 + n1 + n2 + n3 + n4 + n5) & 0xF
+byte13 = (byte0 + byte1 + ... + byte12) & 0xFF
 ```
 
-`tools/decode.py` searches a wider space than this (nibble/byte, sum/xor,
-several payload start offsets, plus a constant offset) and reports every
-hypothesis that fits, so if the real algorithm differs it will say so.
+Consistent across all 40 captures. Two worked examples:
 
-## Open questions the captures will settle
+```
+Cool 30C  23 CB 26 01 00 24 03 01 05 00 00 00 00  -> sum 0x142 -> 0x42
+Off  24C  23 CB 26 01 00 20 03 07 05 00 00 00 00  -> sum 0x144 -> 0x44
+```
 
-1. **Is the frame really 28 bits?** LG portables have also been reported at 48
-   and 56 bits. Set `frame_bits:` accordingly; the field shifts are measured
-   from the end of the frame precisely so that a longer frame does not
-   invalidate them.
-2. **Are there mid-frame gaps?** Some LG AC frames are split into chunks
-   separated by an 8-10 ms space. If `decode.py` reports a mid-frame gap, set
-   `chunk_bits:` and `chunk_gap_low:`.
-3. **Is it LSB-first?** Byte-oriented AC protocols usually transmit each byte
-   least significant bit first. The 28-bit LG frame is not byte-aligned and is
-   MSB-first. `decode.py` shows both views and only trusts the one whose
-   checksum is self-consistent. If yours turns out to be LSB-first and
-   byte-aligned, the component's bit loop needs to reverse each byte, which is
-   the one change that does require editing C++.
-4. **Does Dry carry a setpoint?** The owner's manual says the up/down buttons
-   work in Cool, Dry and Heat, so `mode_carries_setpoint_()` includes Dry. If
-   the captures show a constant temperature nibble in Dry, remove it.
-5. **Is there a toggle or sequence bit?** Section A of the capture matrix
-   answers this. If pressing the same button twice produces different frames,
-   the component needs to alternate that bit, and `on_receive` must mask it out
-   before comparing.
+`decode.py` still reports eight hypotheses that fit, but they are not eight
+independent theories:
 
-## If it turns out not to be a stateful protocol
+- Variants starting at nibble 1, 2, 3 or 4 are the same sum with part of the
+  constant prefix omitted, and the difference absorbed into a constant offset.
+- `nibble_sum` survives alongside `byte_sum` because every byte that actually
+  varies has a zero high nibble (`0x03`, `0x07`, `0x05`), and for such bytes the
+  value equals the nibble sum. The two only diverge once a varying byte exceeds
+  `0x0F`.
 
-Everything above assumes each press transmits the complete state, which is the
-norm for AC remotes with an LCD, and this remote has one. If the captures show
-short, position-independent codes instead, meaning the remote sends "temperature
-up" rather than "temperature is 24", then the approach changes:
+So the plain byte sum with no offset is the only candidate needing no unexplained
+constant, and a timer value of 1–24 hours is the field most likely to finally
+separate it from `nibble_sum`.
 
-- The climate entity has to become optimistic: hold an assumed state, and reach
-  a requested one by emitting N discrete presses with gaps between them.
-- Drift becomes possible whenever someone uses the physical remote or the
-  control panel, so a "resync" button that drives the unit to a known state
-  (power off, then on into Cool at minimum temperature) becomes necessary.
-- `on_receive` can still watch the remote and apply the same increments to the
-  assumed state, which limits the drift in practice.
+## What is left
 
-The component is not written this way today because it is strictly worse, and
-worth adopting only if the evidence demands it.
+1. **Fan values.** Byte 8 is `0x05` at High in Cool and `0x02` in both Dry and Fan
+   mode. Whether `0x02` is Low, Auto, or mode-forced needs section E.
+2. **Timer.** Unknown, and probably where bytes 9–12 stop being zero. Also the
+   likeliest way to pin the checksum down uniquely.
+3. **Light and Swing.** Unknown. If each press produces an identical frame they
+   are pure toggles and one captured frame each is enough.
+4. **Heat.** Not applicable to the LP0721WSR, which is cooling only. The mode
+   nibble has room for it on `SHR` variants.
+5. **Bytes 9–12.** Constant zero so far. Timer or swing state is the obvious
+   candidate for what lives there.
 
 ## Escape hatch
 
-Any frame you discover but that does not fit the climate entity can be bound to
-a button without touching C++:
+Any frame you discover that does not fit the climate entity can be bound to a
+button without touching C++:
 
 ```yaml
 button:
@@ -161,7 +140,7 @@ button:
     on_press:
       - lg_portable_ac.send_frame:
           id: ac
-          frame: 0x88C00A6
+          frame: 0x...
 ```
 
 `send_frame` recomputes the checksum by default. Pass
